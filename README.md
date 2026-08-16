@@ -47,12 +47,21 @@ still wanted, and until there is one, criterion 2 is not honestly closed.
 
 ## Try it
 
-No dependencies, no installation required to run it from a checkout:
+No dependencies and no installation. The package lives under `src/`, so point
+Python at it:
 
 ```
-python3 -m bmc_sensor_audit.cli declare --config <path-to-entity-manager-configs>
-python3 -m bmc_sensor_audit.cli coverage --config <configs> --target https://<bmc> --insecure
-python3 -m bmc_sensor_audit.cli coverage --config <configs> --walk recorded.json --json
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli declare --config <entity-manager-configs>
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --target https://<bmc> --insecure
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli capture  --target https://<bmc> --out before.json
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --walk before.json --json
+```
+
+Or install it and use the console script, which needs no `PYTHONPATH`:
+
+```
+pip install -e .
+bmc-sensor-audit declare --config <entity-manager-configs>
 ```
 
 `--config` takes a file or a directory, repeatably; a directory is walked
