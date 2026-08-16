@@ -1,0 +1,21 @@
+bmc-sensor-audit
+Copyright 2026 James Sheen
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied.
+
+This project reads OpenBMC `entity-manager` configuration files and walks the
+DMTF Redfish API. It is not affiliated with, endorsed by, or part of the OpenBMC
+project or DMTF. No configuration file from any upstream repository is
+redistributed here.
+
+At Stage 2 this project depends on `arbiter-engine`, which is separately
+licensed under the same terms. It is a consumer of that package and not a part
+of it.

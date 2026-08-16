@@ -1,0 +1,13 @@
+#!/bin/sh
+# Refuse a commit carrying something that should not be published.
+#
+# Activate once per clone:   git config core.hooksPath .githooks
+#
+# Versioned deliberately. A hook that lives only in .git/hooks exists on one
+# machine, is invisible in review, and is absent from every fresh clone -- which
+# for a repository authored in public means the safety check is missing exactly
+# when a new contributor needs it most.
+#
+# To commit past it knowingly:   git commit --no-verify
+# That is a real escape hatch and it should be rare enough to notice.
+exec python3 "$(git rev-parse --show-toplevel)/tools/hygiene_check.py"

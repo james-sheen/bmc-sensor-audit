@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bmc-sensor-audit"
+version = "0.0.0"
+description = "Find the sensors that should be reporting and are not."
+readme = "README.md"
+requires-python = ">=3.10"
+
+# PEP 639 SPDX expression. Deliberately NO `License :: OSI Approved ::`
+# classifier: the index rejects the two together, and hatchling accepts both
+# happily, so a clean local build is not the check.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "James Sheen" }]
+keywords = ["openbmc", "redfish", "bmc", "sensors", "monitoring", "hardware"]
+
+# Stage 1 has NO dependencies, on purpose. The Redfish walk is built on urllib
+# from the standard library so the coverage diff runs on a bring-up bench, a CI
+# runner or a jump host with nothing provisioned first. `arbiter-engine` arrives
+# at Stage 2 and not before -- as an optional extra, so Stage 1 keeps that
+# property even after Stage 2 exists.
+dependencies = []
+
+[project.optional-dependencies]
+detect = ["arbiter-engine>=0.1.6,<0.2"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+bmc-sensor-audit = "bmc_sensor_audit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bmc_sensor_audit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

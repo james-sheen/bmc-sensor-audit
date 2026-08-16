@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Recorded walks captured from real hardware. A Redfish walk carries serial
+# numbers, asset tags, MAC addresses and BMC hostnames, so a capture is a fleet
+# inventory disclosure. Redact and rename deliberately before committing one;
+# nothing named `*.capture.json` should ever reach a remote by accident.
+*.capture.json

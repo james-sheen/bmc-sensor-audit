@@ -1,0 +1,156 @@
+"""Command line entry point for Stage 1.
+
+    bmc-sensor-audit coverage --config <path> --target https://<bmc> [--insecure]
+    bmc-sensor-audit coverage --config <path> --walk recorded-walk.json
+    bmc-sensor-audit declare  --config <path>
+
+`--config` accepts a file or a directory, and a directory is walked recursively,
+because a platform's declaration is normally several files (baseboard, chassis,
+front panel) and asking an operator to enumerate them invites them to miss one.
+
+**Exit codes are the CI interface**: 0 clean, 1 regressions found, 2 the run
+could not be completed. 2 is distinct from 1 on purpose -- a pipeline that
+treats "could not reach the BMC" as "sensors are missing" will fail a good
+firmware image, and it only has to do that once before nobody trusts the gate.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from .inventory.diff import compare
+from .inventory.entity_manager import load_declaration
+from .inventory.redfish import RedfishClient, Walk, walk_chassis, walk_from_dict
+from .report import as_json, as_text
+
+EXIT_CLEAN, EXIT_REGRESSION, EXIT_INCOMPLETE = 0, 1, 2
+
+
+def _load_recorded_walk(path: str) -> Walk:
+    """Rehydrate a walk from a recorded fixture.
+
+    Recording once and diffing repeatedly is how the firmware-upgrade gate works:
+    capture before, capture after, compare both against the config. It is also
+    how the test suite runs with no hardware in the room.
+    """
+    return walk_from_dict(json.loads(Path(path).read_text()))
+
+
+def _client(args: argparse.Namespace) -> RedfishClient:
+    return RedfishClient(args.target, username=args.username, password=args.password,
+                         verify_tls=not args.insecure, timeout=args.timeout)
+
+
+def _cmd_capture(args: argparse.Namespace) -> int:
+    """Record a walk to disk, for diffing later or for a before/after gate."""
+    walk = walk_chassis(_client(args))
+    Path(args.out).write_text(json.dumps(walk.to_dict(), indent=2))
+    print(f"wrote {len(walk)} sensor(s) to {args.out}")
+    print(f"  chassis     {len(walk.chassis)}")
+    print(f"  tree shapes {sorted(walk.shapes_seen) or '(none found)'}")
+    if walk.divergence:
+        print(f"  {len(walk.divergence)} sensor(s) present on only one interface")
+    if not walk.complete:
+        # Written anyway: a partial capture is still evidence, and deleting it
+        # loses the record of WHICH subtree failed. But it must not be mistaken
+        # for a baseline, and a diff against it withholds absence findings.
+        print(f"  ** INCOMPLETE -- {len(walk.errors)} fetch(es) failed **")
+        for path, reason in walk.errors[:5]:
+            print(f"     {path}: {reason}")
+        return EXIT_INCOMPLETE
+    return EXIT_CLEAN
+
+
+def _cmd_declare(args: argparse.Namespace) -> int:
+    declaration = load_declaration(args.config)
+    print(f"read {declaration.files_read} file(s) from {len(args.config)} path(s)")
+    print(f"  sensors declared   {len(declaration):>5}")
+    print(f"  templated names    {len(declaration.templated):>5}")
+    print(f"  disabled in config {len(declaration.disabled):>5}")
+    print(f"  anomalies          {len(declaration.anomalies):>5}")
+    print(f"  unreadable files   {len(declaration.unreadable):>5}")
+    for source, reason in declaration.unreadable:
+        print(f"    {source}: {reason}")
+    for anomaly in declaration.anomalies:
+        print(f"  {anomaly}")
+    # An unreadable config is not a clean board; it is an unknown one.
+    return EXIT_INCOMPLETE if declaration.unreadable else EXIT_CLEAN
+
+
+def _cmd_coverage(args: argparse.Namespace) -> int:
+    declaration = load_declaration(args.config)
+    if not declaration.sensors and not declaration.unreadable:
+        print("no sensors declared by any file under the given paths", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    if args.walk:
+        walk = _load_recorded_walk(args.walk)
+        target = args.walk
+    else:
+        walk = walk_chassis(_client(args))
+        target = args.target
+
+    report = compare(declaration, walk,
+                     include_disabled_in_config=args.include_disabled)
+    rendered = (as_json(report, target=target) if args.json
+                else as_text(report, target=target))
+    print(rendered)
+
+    if not report.walk_complete:
+        return EXIT_INCOMPLETE
+    return EXIT_REGRESSION if report.regressions else EXIT_CLEAN
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="bmc-sensor-audit",
+        description="Find the sensors that should be reporting and are not.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    declare = subparsers.add_parser(
+        "declare", help="read the configuration and report what it declares")
+    declare.add_argument("--config", required=True, action="append",
+                         help="entity-manager JSON file or directory (repeatable)")
+    declare.set_defaults(func=_cmd_declare)
+
+    coverage = subparsers.add_parser(
+        "coverage", help="diff a declaration against what a machine reports")
+    coverage.add_argument("--config", required=True, action="append",
+                          help="entity-manager JSON file or directory (repeatable)")
+    source = coverage.add_mutually_exclusive_group(required=True)
+    source.add_argument("--target", help="Redfish base URL, e.g. https://bmc.example")
+    source.add_argument("--walk", help="a recorded walk, instead of live hardware")
+    coverage.add_argument("--username")
+    coverage.add_argument("--password")
+    coverage.add_argument("--insecure", action="store_true",
+                          help="do not verify TLS; BMCs ship self-signed certificates")
+    coverage.add_argument("--timeout", type=float, default=15.0)
+    coverage.add_argument("--json", action="store_true", help="machine-readable output")
+    coverage.add_argument("--include-disabled", action="store_true",
+                          help="also expect sensors the config marks Status: disabled")
+    coverage.set_defaults(func=_cmd_coverage)
+
+    capture = subparsers.add_parser(
+        "capture", help="record a walk to disk, for a before/after gate")
+    capture.add_argument("--target", required=True)
+    capture.add_argument("--out", required=True, help="file to write")
+    capture.add_argument("--username")
+    capture.add_argument("--password")
+    capture.add_argument("--insecure", action="store_true",
+                         help="do not verify TLS; BMCs ship self-signed certificates")
+    capture.add_argument("--timeout", type=float, default=15.0)
+    capture.set_defaults(func=_cmd_capture)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,125 @@
+"""Tests for the pre-commit hygiene check.
+
+**A hygiene check that has never refused anything is not evidence of a clean
+tree.** One of the ten rules here was dead on arrival -- the RFC1918 pattern was
+missing a separator between its prefix and the remaining octets, so it demanded
+four digits where an octet and a dot belonged and never matched an ordinary
+private address. It was written, read back, and looked entirely reasonable.
+Nothing but planting an address and checking the rule fired could have found it.
+
+So every rule gets two tests: it fires on a plant, and it stays quiet on
+something that looks similar and is fine. The second half is the half that keeps
+the check usable -- a rule that goes red for a legitimate reason on every run
+teaches everyone to skip the whole check, which costs more than the rule is
+worth.
+
+`test_every_rule_has_a_plant` is the guard against this file drifting behind the
+rule list: add a rule without a plant and it fails, rather than the new rule
+quietly never being exercised.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+import hygiene_check  # noqa: E402
+
+
+# One hazard per rule, keyed by rule name. Every string here is invented.
+#
+# Each line carries the exemption marker, because a file full of plants is a file
+# full of matches -- the check finds its own test data otherwise, and the noise
+# floor stops being zero. The marker is per line and visible at the site, which
+# is the whole reason it is not a per-file exemption.
+PLANTS = {
+    "github_token": 'T = "github_pat_11AAAA0aaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbb"',  # hygiene: synthetic
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----",  # hygiene: synthetic
+    "aws_key": 'key = "AKIAIOSFODNN7EXAMPLE"',  # hygiene: synthetic
+    "authorization_header": "Authorization: Bearer abcdefghijklmnop",  # hygiene: synthetic
+    "private_ip": 'HOST = "10.42.7.19"',  # hygiene: synthetic
+    "home_path": 'NOTES = "/home/someone/notes.txt"',  # hygiene: synthetic
+    "internal_ticket": "closes CD-1703 in the tracker",  # hygiene: synthetic
+    "private_module": "from k8s_orchestrator.core import thing",  # hygiene: synthetic
+    "mac_address": 'MAC = "de:ad:be:ef:00:11"',  # hygiene: synthetic
+    "redfish_inventory_field": '{"SerialNumber": "CN7082019L003A"}',  # hygiene: synthetic
+}
+
+# Things that resemble a hazard and are not one. Each is present in real trees.
+NEAR_MISSES = [
+    'BASE = "http://127.0.0.1:8000"',        # the mock BMC binds loopback every run
+    'DNS = "8.8.8.8"',                       # public address
+    'HOST = "172.15.0.1"',                   # just outside RFC1918
+    'HOST = "11.0.0.1"',                     # just outside RFC1918
+    "see CD-4 for context",                  # too short to be a ticket id
+    'PARTIAL = "de:ad:be"',                  # not a MAC
+    '{"SerialNumber": ""}',                  # a field with no value in it
+    'path = "/rootkit/thing"',               # not a home directory
+]
+
+
+def _scan(tmp_path: Path, text: str):
+    (tmp_path / "sample.py").write_text(text + "\n")
+    return hygiene_check.scan([Path("sample.py")], tmp_path)
+
+
+def test_every_rule_has_a_plant():
+    """Adding a rule without a hazard to prove it against fails here, rather
+    than shipping a rule nothing ever exercises."""
+    assert {rule.name for rule in hygiene_check.RULES} == set(PLANTS)
+
+
+@pytest.mark.parametrize("name", sorted(PLANTS))
+def test_each_rule_fires_on_its_hazard(name, tmp_path):
+    hits = _scan(tmp_path, PLANTS[name])
+    assert [hit[2].name for hit in hits] == [name]
+
+
+@pytest.mark.parametrize("line", NEAR_MISSES)
+def test_near_misses_stay_quiet(line, tmp_path):
+    assert _scan(tmp_path, line) == []
+
+
+def test_the_exemption_marker_silences_a_line(tmp_path):
+    """The redaction tests must contain realistic asset tags to assert those tags
+    never reach a capture. The check and the test want the same strings for
+    opposite reasons."""
+    plain = _scan(tmp_path, PLANTS["redfish_inventory_field"])
+    marked = _scan(tmp_path, PLANTS["redfish_inventory_field"] + "  # hygiene: synthetic")
+    assert len(plain) == 1
+    assert marked == []
+
+
+def test_the_marker_is_per_line_not_per_file(tmp_path):
+    """Whole-file exemption would make the exempted file the one place a real
+    credential could sit unnoticed."""
+    hits = _scan(tmp_path, PLANTS["private_ip"] + "  # hygiene: synthetic\n"
+                 + PLANTS["mac_address"])
+    assert [hit[2].name for hit in hits] == ["mac_address"]
+
+
+def test_the_repository_itself_is_clean():
+    """The noise floor. This is the assertion that makes the check usable: if it
+    is red on this tree for a legitimate reason, everybody learns to skip it."""
+    root = Path(__file__).resolve().parents[1]
+    paths = [p.relative_to(root) for p in sorted(root.rglob("*")) if p.is_file()]
+    hits = hygiene_check.scan(paths, root)
+    assert hits == [], "\n".join(f"{h[0]}:{h[1]} [{h[2].name}]" for h in hits)
+
+
+def test_a_match_is_never_printed(capsys, tmp_path, monkeypatch):
+    """Echoing a token to a terminal publishes it to a scrollback buffer, a CI
+    log, and anything reading either. Only its length is reported."""
+    secret = PLANTS["github_token"]
+    (tmp_path / "sample.py").write_text(secret + "\n")
+    monkeypatch.setattr(hygiene_check, "_tracked_and_untracked",
+                        lambda root: [Path("sample.py")])
+    code = hygiene_check.main(["--all", "--root", str(tmp_path)])
+    assert code == hygiene_check.EXIT_FOUND
+    captured = capsys.readouterr()
+    assert "github_pat_" not in captured.err + captured.out
+    assert "characters on this line" in captured.err
