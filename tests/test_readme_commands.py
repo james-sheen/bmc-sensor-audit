@@ -118,11 +118,11 @@ class TestTheConsoleScript:
     **Its limit, stated rather than implied**: these assertions do not run `pip`.
     They catch the realistic breakages — a renamed entry point, a script name that
     drifted from the one the README prints, a target that no longer resolves — and
-    they do not catch packaging mechanics. The full path (fresh clone,
-    `pip install -e .`, run from a directory with no checkout) was exercised
-    manually against the published clone on 2026-08-17 and worked. If that
-    verification is ever needed as a gate rather than a spot check, it belongs in
-    CI where a clean runner is free, not here where every developer pays for it.
+    they do not catch packaging mechanics. **That gap is now closed elsewhere**:
+    `.github/workflows/checks.yml` installs the package on a clean runner and runs
+    the console script from a directory with no checkout, on every push. Here the
+    checks stay structural so every developer does not pay for a pip install on
+    every run; there they are real, because a clean runner is free.
     """
 
     def test_the_readme_and_pyproject_agree_on_the_script_name(self):

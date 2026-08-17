@@ -1,0 +1,66 @@
+# The gate that does not depend on anybody's local configuration.
+#
+# The pre-commit hook cannot enable itself. Git refuses to let a repository set
+# its own `core.hooksPath`, and that refusal is correct -- a repo that could
+# would be arbitrary code execution on clone. So the hook is opt-in per clone by
+# design, and it was unset in the authoring clone for the first three commits:
+# the only check this repository had never ran on any of them.
+#
+# This workflow is the answer to that. It runs on the server, on every push and
+# every pull request, and no local setting can switch it off.
+#
+# Deliberately NOT schedule-only. A sibling project has a scheduled workflow that
+# accumulated zero runs across fifteen pushes -- a gate nobody disabled and
+# nobody exercised. On push is what makes a check real.
+
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Hygiene sweep
+        # The same check the hook runs, over the whole tree rather than the
+        # staged diff. This is the backstop for every commit made from a clone
+        # where the hook was never enabled.
+        run: python3 tools/hygiene_check.py --all
+
+      - name: Tests
+        # NOT pip-installed first, deliberately. One test asserts that the bare
+        # `python3 -m bmc_sensor_audit.cli` FAILS without PYTHONPATH, and an
+        # install would put the package on the path and make that test pass for
+        # the wrong reason -- turning a real negative into a vacuous one.
+        run: python3 -m pytest tests/ -q
+
+      - name: The documented console-script path, from a clean checkout
+        # The second path the README prints, which the suite can only check
+        # structurally because it must not run pip. Here a clean runner is free,
+        # so run it for real: install, leave the checkout, and execute the
+        # command a reader would type.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet -e .
+          mkdir -p "$RUNNER_TEMP/board" && cd "$RUNNER_TEMP/board"
+          printf '%s' '{"Name":"Board","Exposes":[{"Name":"Inlet Temp","Type":"TMP75"}]}' > board.json
+          bmc-sensor-audit declare --config board.json | tee out.txt
+          grep -q "sensors declared" out.txt
+
+      - name: The documented module path, from a directory with no checkout
+        # The first path the README prints. Run from outside the tree so a stray
+        # working-directory import cannot make it pass by accident.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mod" && cd "$RUNNER_TEMP/mod"
+          printf '%s' '{"Name":"Board","Exposes":[{"Name":"Inlet Temp","Type":"TMP75"}]}' > board.json
+          PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m bmc_sensor_audit.cli declare --config board.json

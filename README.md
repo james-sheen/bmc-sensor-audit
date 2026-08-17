@@ -33,8 +33,8 @@ installable from an index, and there is no tagged version.
 | Walk capture | working — `capture` writes a walk for a before/after gate |
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
-| Hygiene check | working — 10 rules, versioned pre-commit hook |
-| Tests | 105 collected, all passing or skipped |
+| Hygiene check | working — 10 rules, versioned pre-commit hook, plus a CI sweep the hook cannot be forgotten past |
+| Tests | 111 collected, all passing or skipped |
 | Liveness detection (Stage 2) | not started |
 | Fleet comparison (Stage 3) | not started |
 
@@ -130,13 +130,28 @@ in their tree acquires no new licence obligation by adding this.
 This repository is **authored in public**. There is no private tree, no scrub and
 no staging step between what gets written here and what the world reads. That
 removes an entire class of bug — nothing can be mangled in translation — and it
-removes the safety net at the same time. There is nowhere for a check to live
-except before the commit.
+removes the safety net at the same time.
 
 ```
 git config core.hooksPath .githooks      # once, per clone
 python3 tools/hygiene_check.py --all     # sweep the whole tree
 ```
+
+**The hook cannot install itself, and that first line is the whole problem.** Git
+refuses to let a cloned repository set its own `core.hooksPath`, which is the
+right refusal — a repo that could would be arbitrary code execution on clone. So
+activation is manual, per clone, and a manual step is one that gets skipped. It
+was skipped here: `core.hooksPath` was unset in the authoring clone for the first
+three commits, so the only check this project had never ran on any of them. The
+failure mode of a hook that is not installed is silence — commits simply succeed,
+exactly as they do when the check passes.
+
+Hence two more layers, because one opt-in step is not a gate:
+
+- **CI runs the same sweep on every push and pull request**, on the server, where
+  no local setting can switch it off. It is not schedule-only, deliberately.
+- **The test suite fails if the hook is not enabled in your clone**, so you find
+  out in one line rather than not at all.
 
 Ten rules, each with a test that plants its hazard and a test that keeps it quiet
 on something similar and harmless. The second half is what keeps the check
