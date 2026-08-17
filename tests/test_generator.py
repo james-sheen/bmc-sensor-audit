@@ -254,7 +254,25 @@ class TestGeneratedOutputIsSubjectToTheHygieneRules:
     package — Stage 1 ships no scanner. It still catches the real case: a declaration
     carrying a literal serial, part number or asset tag in a sensor name would put it
     straight into a model somebody commits.
+
+    The pair needs PyYAML, which Stage 1 does not: the artifact these rules have to
+    police is the SERIALISED model, so the check needs the serialiser. Ungated, that
+    import failed on any interpreter without PyYAML — including the CI runner, which
+    installs nothing on purpose, so this pair was failing there from the commit that
+    introduced it.
+
+    The gate below is therefore only half the fix. A skip here would replace a leak
+    check with silence in the one environment CI actually runs, which is worse than
+    the failure it removes, so the workflow installs PyYAML for the test step. If
+    that ever stops being true, this becomes two quiet skips and nothing says so.
     """
+
+    @pytest.fixture(autouse=True)
+    def _needs_the_serialiser(self):
+        pytest.importorskip(
+            "yaml",
+            reason="the hygiene rules police the serialised model, so this pair "
+                   "needs PyYAML; CI installs it, and the [detect] extra brings it")
 
     def test_the_model_generated_from_the_corpus_is_clean(self, built, tmp_path):
         import yaml

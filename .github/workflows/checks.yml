@@ -65,11 +65,22 @@ jobs:
           exit $FAILED
 
       - name: Tests
-        # NOT pip-installed first, deliberately. One test asserts that the bare
-        # `python3 -m bmc_sensor_audit.cli` FAILS without PYTHONPATH, and an
-        # install would put the package on the path and make that test pass for
-        # the wrong reason -- turning a real negative into a vacuous one.
-        run: python3 -m pytest tests/ -q
+        # The PACKAGE is not pip-installed first, deliberately. One test asserts that
+        # a bare `python3 -m bmc_sensor_audit.cli` FAILS without PYTHONPATH, and an
+        # install would put the package on the path and make that test pass for the
+        # wrong reason -- turning a real negative into a vacuous one.
+        #
+        # PyYAML is a different question, and it is installed. The generated-output
+        # hygiene pair scans the SERIALISED model, so it needs the serialiser, and on
+        # a bare interpreter those two tests failed here from the commit that added
+        # them. Gating them and stopping there would have turned that red into a
+        # skip -- a leak check that no longer runs anywhere it matters. Installing
+        # PyYAML does not put bmc_sensor_audit on the path, so the negative above is
+        # untouched.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 -m pytest tests/ -q
 
       - name: The documented console-script path, from a clean checkout
         # The second path the README prints, which the suite can only check
