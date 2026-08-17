@@ -143,3 +143,67 @@ class TestTheDenominatorIsDerivable:
         assert checked.get("entities") == 4
         assert checked.get("invariants") == 4 * 2, \
             f"expected 4 entities x 2 axioms, got {checked}"
+
+
+@pytest.fixture(scope="module")
+def generated(tmp_path_factory):
+    """Module-scoped, not class-scoped-as-a-method: pytest deprecates the latter and
+    it silently stops sharing state, which would make these three tests rebuild the
+    whole corpus model each time."""
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "src"))
+    from bmc_sensor_audit.detect.generator import generate
+    from bmc_sensor_audit.inventory.entity_manager import load_declaration
+
+    model, manifest = generate(
+        load_declaration([str(root / "tests" / "fixtures" / "upstream")]))
+    path = tmp_path_factory.mktemp("generated") / "model.yaml"
+    path.write_text(yaml.safe_dump(model))
+    session = EngineSession()
+    session.load_model(str(path))
+    return model, manifest, session
+
+
+class TestTheGeneratedModelIsAcceptedWhole:
+    """The generator's own oracle, and the reason it needs the engine present.
+
+    A generated model can be well-formed as YAML and still be half-ignored: a key the
+    engine does not read, an indicator nothing can reach. The engine reports both, so
+    generation is checked against the consumer rather than against our idea of it.
+
+    This is the plan's Phase 1 item 5, and it lives here rather than in
+    `test_generator.py` because that file must run with no engine installed.
+    """
+
+    def test_the_engine_reads_every_key_the_generator_emits(self, generated):
+        """`unread_fields` is the engine saying it ignored something. A generator
+        emitting a key nothing reads produces a model that looks richer than it is."""
+        _, _, session = generated
+        unread = (model_describe(session).to_dict().get("model") or {}).get(
+            "unread_fields") or []
+        assert unread == [], f"the engine ignored generated keys: {unread}"
+
+    def test_no_generated_declaration_is_unreachable(self, generated):
+        """The mirror: an indicator declared but impossible to reach fires never, and
+        counts toward the denominator while doing it."""
+        _, _, session = generated
+        unreachable = (model_describe(session).to_dict().get("model") or {}).get(
+            "unreachable_declarations") or []
+        assert unreachable == [], f"unreachable declarations: {unreachable}"
+
+    def test_a_reading_below_its_lower_bound_is_found_and_translated(self, generated):
+        """End to end, on real vendored thresholds: the negation transform fires, and
+        the manifest turns the engine's inverted wording into what a person measured."""
+        from bmc_sensor_audit.detect.generator import READING, READING_LOW
+        _, manifest, session = generated
+        sensor = next(s for s in manifest.sensors if s.lower[1] is not None)
+        below = sensor.lower[1] - 0.1
+        session.add_entity(sensor.entity_type, sensor.entity_type,
+                           properties={READING: below, READING_LOW: -below})
+        findings = [f for f in (check(session).to_dict().get("findings") or [])
+                    if f.get("entity_id") == sensor.entity_type]
+        assert findings, f"{sensor.declared_name} below {sensor.lower[1]} produced nothing"
+        translated = manifest.translate_finding(findings[0])
+        assert "BELOW" in translated and sensor.declared_name in translated, translated
