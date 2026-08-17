@@ -253,3 +253,73 @@ class TestTheUnmappedReaderToleratesRelocation:
 
     def test_absent_means_empty_not_an_error(self):
         assert unmapped_observations({"model": {}}) == []
+
+
+class TestTheDetectCommandComposesTwoStages:
+    """The CLI surface. These run with no engine installed, which is exactly the case
+    worth pinning: a tool that crashes when its optional extra is absent has made the
+    extra mandatory by accident."""
+
+    @staticmethod
+    def _run(tmp_path, *, walks=1, threshold_in_walk=True):
+        import subprocess
+        config = tmp_path / "board.json"
+        config.write_text(json.dumps({"Name": "B", "Exposes": [
+            {"Name": "Inlet Temp", "Type": "TMP75", "Thresholds": [
+                {"Name": "upper critical", "Direction": "greater than",
+                 "Value": 80, "Severity": 1}]}]}))
+        argv = [sys.executable, "-m", "bmc_sensor_audit.cli", "detect",
+                "--config", str(config)]
+        for index in range(walks):
+            walk = tmp_path / f"w{index}.json"
+            walk.write_text(json.dumps({
+                "format": "bmc-sensor-audit/walk/1", "chassis": ["/c/1"],
+                "shapes_seen": ["sensors"], "errors": [],
+                "sensors": [{"name": "Inlet Temp", "path": "/c/1/S/0",
+                             "reading": 22.5 + index, "state": "Enabled",
+                             "health": "OK",
+                             "thresholds": {"upper/critical": 80.0}
+                             if threshold_in_walk else {}}]}))
+            argv += ["--walk", str(walk)]
+        import os
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(ROOT / "src")
+        return subprocess.run(argv, cwd=str(tmp_path), capture_output=True,
+                              text=True, env=env)
+
+    def test_stage_one_still_runs_and_reports_without_the_engine(self, tmp_path):
+        result = self._run(tmp_path)
+        assert "declared" in result.stdout, result.stderr
+        assert "Sensor coverage" in result.stdout
+
+    def test_a_missing_extra_is_could_not_complete_not_a_failure(self, tmp_path):
+        """`2`, not `1`. A pipeline that reads *the engine is not installed* as
+        *sensors are missing* fails a good firmware image."""
+        pytest.importorskip
+        try:
+            import arbiter_engine  # noqa: F401
+            pytest.skip("the extra is installed; this pins the absent case")
+        except ImportError:
+            pass
+        result = self._run(tmp_path)
+        assert result.returncode == 2, result.stdout[-400:]
+        assert "pip install" in result.stderr, result.stderr
+
+    def test_the_install_hint_names_the_extra_by_name(self, tmp_path):
+        try:
+            import arbiter_engine  # noqa: F401
+            pytest.skip("the extra is installed")
+        except ImportError:
+            pass
+        result = self._run(tmp_path)
+        assert "[detect]" in result.stderr
+
+    def test_stage_one_coverage_is_stated_as_unaffected(self, tmp_path):
+        """A reader who sees a `2` needs to know which half of the run produced it."""
+        try:
+            import arbiter_engine  # noqa: F401
+            pytest.skip("the extra is installed")
+        except ImportError:
+            pass
+        result = self._run(tmp_path)
+        assert "unaffected" in result.stderr

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
+import json
 import sys
 from pathlib import Path
 
@@ -127,6 +129,76 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
     return EXIT_REGRESSION if report.regressions else EXIT_CLEAN
 
 
+def _cmd_detect(args: argparse.Namespace) -> int:
+    """Both stages in one run, and one exit code.
+
+    Stage 1 answers presence; Stage 2 answers liveness for what is present. They are
+    composed rather than merged, because they fail differently: a walk that could not
+    complete is not a board with missing sensors, and neither is an engine that is not
+    installed.
+    """
+    declaration = load_declaration(args.config)
+    if not declaration.sensors and not declaration.unreadable:
+        print("no sensors declared by any file under the given paths", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    # `--walk` is repeatable and CHRONOLOGICAL, oldest first: stuck-at needs history,
+    # and one walk is one sample. A live target gives exactly one.
+    if args.walk:
+        walks = [_load_recorded_walk(path) for path in args.walk]
+        target = args.walk[-1]
+    else:
+        walks = [walk_chassis(_client(args))]
+        target = args.target
+
+    reports = [compare(declaration, walk,
+                       include_disabled_in_config=args.include_disabled)
+               for walk in walks]
+    current = reports[-1]
+    print(as_text(current, target=target))
+
+    if not current.walk_complete:
+        # An incomplete walk is not an empty machine, and it is not a model worth
+        # feeding either. Stop before the engine sees a partial picture.
+        print("\nwalk incomplete; liveness not evaluated", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    try:
+        import yaml
+        from arbiter_engine.api import EngineSession, check, model_describe
+    except ImportError as error:
+        print(f"\nliveness needs the optional extra, which is not installed: {error}\n"
+              "    pip install 'bmc-sensor-audit[detect]'\n"
+              "Stage 1 coverage above is complete and unaffected.", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    from .detect.feeder import evaluate, feed
+    from .detect.generator import generate
+    from .report import detect_as_text
+
+    model, manifest = generate(declaration, expect_variation=not args.no_stuck_at)
+    if args.model_out:
+        Path(args.model_out).write_text(yaml.safe_dump(model))
+    if args.manifest_out:
+        Path(args.manifest_out).write_text(json.dumps(manifest.to_dict(), indent=2))
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+        handle.write(yaml.safe_dump(model))
+        model_path = handle.name
+    session = EngineSession()
+    session.load_model(model_path)
+
+    feed_result = feed(session, manifest, reports)
+    outcome = evaluate(check(session).to_dict(), model_describe(session).to_dict(),
+                       manifest, strict_declines=args.strict_declines)
+    print(detect_as_text(outcome, feed_result))
+
+    # Composed, not merged. The worse of the two wins, and `2` outranks `1` because
+    # could-not-complete is a different claim from something-got-worse.
+    stage1 = EXIT_REGRESSION if current.regressions else EXIT_CLEAN
+    return max(stage1, outcome.exit_code)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bmc-sensor-audit",
@@ -155,6 +227,29 @@ def build_parser() -> argparse.ArgumentParser:
     coverage.add_argument("--include-disabled", action="store_true",
                           help="also expect sensors the config marks Status: disabled")
     coverage.set_defaults(func=_cmd_coverage)
+
+    detect = subparsers.add_parser(
+        "detect", help="coverage plus liveness, in one run and one exit code")
+    detect.add_argument("--config", required=True, action="append",
+                        help="entity-manager JSON file or directory (repeatable)")
+    detect_source = detect.add_mutually_exclusive_group(required=True)
+    detect_source.add_argument("--target", help="Redfish base URL")
+    detect_source.add_argument("--walk", action="append",
+                               help="a recorded walk; repeatable, OLDEST FIRST -- "
+                                    "stuck-at needs history and one walk is one sample")
+    detect.add_argument("--username")
+    detect.add_argument("--password")
+    detect.add_argument("--insecure", action="store_true",
+                        help="do not verify TLS; BMCs ship self-signed certificates")
+    detect.add_argument("--timeout", type=float, default=15.0)
+    detect.add_argument("--include-disabled", action="store_true")
+    detect.add_argument("--strict-declines", action="store_true",
+                        help="fail on data-sufficiency and unrecognised declines too")
+    detect.add_argument("--no-stuck-at", action="store_true",
+                        help="do not expect readings to vary; turns off liveness")
+    detect.add_argument("--model-out", help="write the generated domain model here")
+    detect.add_argument("--manifest-out", help="write the generation manifest here")
+    detect.set_defaults(func=_cmd_detect)
 
     capture = subparsers.add_parser(
         "capture", help="record a walk to disk, for a before/after gate")

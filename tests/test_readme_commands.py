@@ -78,8 +78,17 @@ def test_every_documented_command_parses(line):
 
     sys.path.insert(0, str(ROOT / "src"))
     from bmc_sensor_audit.cli import build_parser
-    parsed = build_parser().parse_args(argv)
-    assert parsed.command in {"declare", "coverage", "capture"}
+    parser = build_parser()
+    parsed = parser.parse_args(argv)
+
+    # The valid set is read OUT OF the parser, never restated here. Restating it
+    # made this test fail the day a fourth subcommand was added -- not because the
+    # command was wrong, but because the test carried a copy of a list that had
+    # moved. A checker built from the author's vocabulary inherits the author's
+    # blind spot, which is the failure this whole file exists to catch elsewhere.
+    known = {name for action in parser._subparsers._group_actions
+             for name in action.choices}
+    assert parsed.command in known, f"{parsed.command} is not a subcommand: {known}"
 
 
 def test_the_documented_invocation_runs_from_a_directory_with_no_checkout(tmp_path):

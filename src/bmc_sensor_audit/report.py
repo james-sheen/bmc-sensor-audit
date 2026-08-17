@@ -145,3 +145,78 @@ def as_text(report: DiffReport, *, target: str | None = None) -> str:
     lines.append(f"{counts['regressions']} regression(s) of {counts['findings']} "
                  f"finding(s) -- {verdict}")
     return "\n".join(lines)
+
+
+def detect_as_text(outcome, feed_result) -> str:
+    """Render the Stage 2 verdict.
+
+    Written so the three decline classes stay visibly different. Collapsing them into
+    one list would hide the distinction the exit code is built on: a sensor whose value
+    never arrived is a defect, a sensor without enough history yet is a fact, and a
+    reason this build does not recognise is neither and must not be filed as either.
+    """
+    lines = ["", "Liveness (Stage 2)", "------------------"]
+    lines.append(f"  fed to the engine    {feed_result.fed:>5}")
+    if feed_result.skipped_not_reading:
+        lines.append(f"  not reading, skipped {feed_result.skipped_not_reading:>5}"
+                     "   (Stage 1 owns absence; the engine is not asked)")
+    if feed_result.skipped_not_modelled:
+        lines.append(f"  not modelled         {feed_result.skipped_not_modelled:>5}"
+                     "   (templated, non-sensor, or no thresholds to bound against)")
+    if outcome.checked:
+        lines.append(f"  invariants checked   {outcome.checked.get('invariants', 0):>5}"
+                     f"   over {outcome.checked.get('entities', 0)} entities")
+
+    warming = feed_result.warming_up
+    if warming:
+        shown = sorted(warming.items())[:5]
+        lines.append("")
+        lines.append(f"  Liveness warming up -- {len(warming)} sensor(s) below the "
+                     "sample floor; stuck-at cannot be judged yet:")
+        for name, count in shown:
+            lines.append(f"      {name}: {count} sample(s)")
+        if len(warming) > len(shown):
+            lines.append(f"      ... and {len(warming) - len(shown)} more")
+
+    if outcome.findings:
+        lines.append("")
+        lines.append(f"Findings -- {len(outcome.findings)}")
+        for finding in outcome.findings:
+            lines.append(f"  {finding}")
+
+    if outcome.core_case_declines:
+        lines.append("")
+        lines.append(f"Could not evaluate, and should have been able to -- "
+                     f"{len(outcome.core_case_declines)}")
+        lines.append("  Stage 1 reported these as reading. Their values did not reach")
+        lines.append("  the model, which means the name mapping is wrong.")
+        for decline in outcome.core_case_declines:
+            lines.append(f"    {decline}")
+
+    if outcome.unmapped:
+        lines.append("")
+        lines.append(f"Readings the model never read -- {len(outcome.unmapped)}")
+        for entry in outcome.unmapped:
+            lines.append(f"    {entry}")
+
+    if outcome.data_declines:
+        lines.append("")
+        lines.append(f"Not enough data yet -- {len(outcome.data_declines)} "
+                     "(reported, not a failure)")
+        for decline in outcome.data_declines[:5]:
+            lines.append(f"    {decline}")
+        if len(outcome.data_declines) > 5:
+            lines.append(f"    ... and {len(outcome.data_declines) - 5} more")
+
+    if outcome.unclassified_declines:
+        lines.append("")
+        lines.append(f"Declines this build does not recognise -- "
+                     f"{len(outcome.unclassified_declines)}")
+        lines.append("  Reported rather than filed under the nearest known reason.")
+        for decline in outcome.unclassified_declines[:5]:
+            lines.append(f"    {decline}")
+
+    if not (outcome.findings or outcome.core_case_declines or outcome.unmapped):
+        lines.append("")
+        lines.append("  No liveness findings.")
+    return "\n".join(lines)

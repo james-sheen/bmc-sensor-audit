@@ -161,20 +161,33 @@ class Manifest:
         """
         entity_type = self.type_for_entity(finding.get("entity_id", ""))
         problem = str(finding.get("problem_type") or "")
-        indicator = problem.split(":", 1)[1] if ":" in problem else ""
+        kind, _, indicator = problem.partition(":")
         severity = finding.get("severity", "")
+        reason = str(finding.get("reason") or "")
 
         sensor = next((s for s in self.sensors if s.entity_type == entity_type), None)
         if sensor is None or not indicator:
-            return str(finding.get("reason") or problem or "unattributable finding")
+            return reason or problem or "unattributable finding"
 
-        if indicator == READING_LOW:
-            bound = sensor.lower[1] if severity == "critical" else sensor.lower[0]
-            return (f"{sensor.declared_name} is BELOW its lower {severity} bound"
-                    + (f" of {bound}" if bound is not None else ""))
-        bound = sensor.upper[1] if severity == "critical" else sensor.upper[0]
-        return (f"{sensor.declared_name} is above its upper {severity} bound"
-                + (f" of {bound}" if bound is not None else ""))
+        if kind != "threshold_exceeded":
+            # Not a bound breach -- a frozen series, or whatever the engine grows
+            # next. Its own wording is good and self-explaining; the only thing wrong
+            # with it is that it names the indicator rather than the sensor. Rewriting
+            # more than that would be inventing an explanation for a finding shape
+            # this build has never seen.
+            return f"{sensor.declared_name}: {reason.replace(indicator, 'the reading', 1)}"
+
+        below = indicator == READING_LOW
+        bounds = sensor.lower if below else sensor.upper
+        # `severity` is the engine's vocabulary, not ours: `high` turns up alongside
+        # `warning` and `critical`. Mapping an unknown severity onto the nearest slot
+        # printed a real number under the wrong name -- `upper high bound of 3.52` for
+        # a reading of 3.35. An unrecognised severity now omits the bound instead of
+        # asserting one.
+        bound = {"critical": bounds[1], "warning": bounds[0]}.get(severity)
+        direction = "BELOW its lower" if below else "above its upper"
+        text = f"{sensor.declared_name} is {direction} {severity} bound"
+        return text + (f" of {bound}" if bound is not None else "")
 
     def type_for_entity(self, entity_id: str) -> str | None:
         """The entity type a feeder registered this entity under.

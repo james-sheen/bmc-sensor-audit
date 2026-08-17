@@ -179,6 +179,34 @@ class TestTranslationBackToTheSensor:
                    "reason": f"{READING} exceeds critical threshold"}
         assert "above" in manifest.translate_finding(finding)
 
+    def test_a_liveness_finding_is_not_rendered_as_a_threshold_breach(self, built):
+        """The engine has more than one finding shape. Treating every one as a bound
+        breach printed `3VSB is above its upper high bound of 3.52` for a sensor
+        sitting at 3.35 whose series had simply stopped moving -- a real number under
+        the wrong name, which is worse than no number."""
+        _, _, manifest = built
+        sensor = manifest.sensors[0]
+        finding = {"entity_id": sensor.entity_type, "severity": "high",
+                   "problem_type": "frozen_series:reading", "axiom": "STABILITY",
+                   "reason": "reading has not changed across 14 of 30 observations"}
+        translated = manifest.translate_finding(finding)
+        assert sensor.declared_name in translated
+        assert "has not changed" in translated
+        assert "bound" not in translated
+
+    def test_an_unrecognised_severity_omits_the_bound_rather_than_guessing(self, built):
+        """`severity` is the engine's vocabulary, not ours -- `high` arrives alongside
+        `warning` and `critical`. Mapping an unknown one onto the nearest slot names a
+        threshold the finding is not about."""
+        _, _, manifest = built
+        sensor = next(s for s in manifest.sensors if s.upper[1] is not None)
+        finding = {"entity_id": sensor.entity_type, "severity": "high",
+                   "problem_type": f"threshold_exceeded:{READING}", "reason": "x"}
+        translated = manifest.translate_finding(finding)
+        assert "high bound" in translated
+        assert str(sensor.upper[0]) not in translated
+        assert str(sensor.upper[1]) not in translated
+
     def test_an_unrecognised_shape_falls_back_to_the_engines_own_text(self, built):
         """The `problem_type` shape was measured, not specified. If it moves, this
         must degrade to the engine's wording rather than invent one."""

@@ -49,6 +49,15 @@ jobs:
       - name: Four pillars and two payload locations
         run: PYTHONPATH=src python3 -m pytest tests/test_engine_bridge.py -q
 
+      - name: Release test -- generator, feeder and bridge on the pinned floor
+        # The composed check: the model generator, the feeder and gate, and the
+        # end-to-end bridge, all against the engine the range resolves to. Run
+        # together because they only mean anything together -- a generator whose
+        # output the engine half-ignores passes its own golden tests.
+        run: |
+          PYTHONPATH=src python3 -m pytest \
+            tests/test_generator.py tests/test_feeder.py tests/test_engine_bridge.py -q
+
       - name: Stage 1 stays dependency-free
         # The engine is an optional extra. If Stage 1 ever acquires a hard dependency
         # on it, that is a design regression and it should fail here rather than be

@@ -34,8 +34,8 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 230 in the dependency-free suite; the `[detect]` extra adds an engine canary |
-| Liveness detection (Stage 2) | generator + feeder working — model from declarations, readings fed, envelope mapped to an exit code |
+| Tests | 237 in the dependency-free suite; the `[detect]` extra adds an engine canary |
+| Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
@@ -58,6 +58,12 @@ PYTHONPATH=src python3 -m bmc_sensor_audit.cli declare --config <entity-manager-
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --target https://<bmc> --insecure
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli capture  --target https://<bmc> --out before.json
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --walk before.json --json
+```
+
+Coverage plus liveness in one run, once the optional extra is installed:
+
+```
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli detect --config <configs> --walk before.json --walk after.json
 ```
 
 Or install it and use the console script, which needs no `PYTHONPATH`:
@@ -145,6 +151,55 @@ silently corrupts a naive implementation:
   what decides which side a threshold guards. A name whose severity level is
   unrecognised is reported rather than discarded: a closed enum with a missing
   member misclassifies confidently instead of failing.
+
+## Liveness (Stage 2)
+
+A sensor can be present, enabled, and reporting a perfectly plausible number that
+stopped being a measurement some time ago. No threshold check can see that, because the
+value is in range — it is in range because it is frozen. `detect` runs the coverage diff
+and then asks [`arbiter-engine`](https://pypi.org/project/arbiter-engine/) the liveness
+question about whatever is still reporting.
+
+Install it with the extra, since Stage 1 stays dependency-free:
+
+```
+pip install 'bmc-sensor-audit[detect]'
+```
+
+**What it finds.** Readings past an upper bound; readings beneath a lower bound; a
+series that has stopped moving while the model says it should vary; and a sensor Stage 1
+said was reading whose value never reached the model, which means the name mapping is
+wrong.
+
+**Lower bounds go in negated.** The engine's bounds check is upper-only, so a stopped
+fan reading zero against a lower critical of 500 produces nothing at all. A lower bound
+becomes a second indicator carrying the negated reading against negated thresholds. The
+engine then reports `reading_low exceeds critical threshold`, which says a stopped fan
+is spinning too fast — so the report translates it back before you see it.
+
+**What it deliberately does not find.** Oscillation at periods other than two samples. A
+fan hunting on a four-sample cycle produces no finding and no decline. That is a gap in
+what is detected and **not** a defect in the engine: its metric is defined for
+alternating values, and a period-four square wave cannot match it by construction. The
+measurement is in [`docs/stage2/s2-oscillation-not-a-defect.md`](docs/stage2/s2-oscillation-not-a-defect.md).
+
+**How to read the declines.** They are the point, not noise:
+
+| Decline | Means | Exit code |
+|---|---|---|
+| `insufficient_samples` | liveness is warming up — one walk is one sample and stuck-at needs about ten | `0`, reported |
+| `missing_property` | Stage 1 said this was reading and its value did not arrive — a mapping bug | `1` |
+| anything else | a reason this build does not recognise | `0`, reported prominently |
+
+The third row is deliberate. The engine does not publish its decline vocabulary, so an
+unfamiliar reason is a certainty over time rather than a hypothetical, and filing it
+under the nearest familiar one would reclassify the case and report it confidently.
+`--strict-declines` escalates the first and third rows to `1`.
+
+**Stuck-at detection is proven against synthetic series only.** The sample floor was
+measured, the pathway works end to end, and no real BMC has been watched going quiet.
+Until a capture from real hardware exists, that half is honestly open — as is Stage 1's
+criterion 2, for the same reason and with the same fix.
 
 ## Two defects found in the upstream corpus
 
