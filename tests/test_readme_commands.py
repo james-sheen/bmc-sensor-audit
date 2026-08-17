@@ -182,9 +182,19 @@ class TestTheReadmeTestCount:
     """
 
     def test_the_readme_count_matches_what_pytest_collects(self):
+        """Measured on the DEPENDENCY-FREE suite, which is a population that does not
+        depend on what happens to be installed.
+
+        The optional `[detect]` extra adds eight canary tests, so without this the
+        figure differs by whether the engine is present — 161 against 169 — and the
+        check goes red for a legitimate reason on any machine that has the extra. A
+        row like that teaches people to skip the whole check, which costs more than
+        the check is worth.
+        """
         collected = subprocess.run(
             [sys.executable, "-m", "pytest", str(ROOT / "tests"),
-             "--collect-only", "-q", "-p", "no:cacheprovider"],
+             "--collect-only", "-q", "-p", "no:cacheprovider",
+             "--ignore", str(ROOT / "tests" / "test_engine_bridge.py")],
             cwd=str(ROOT), capture_output=True, text=True)
         found = re.search(r"(\d+) tests? collected", collected.stdout)
         assert found, f"could not read a collection count:\n{collected.stdout[-400:]}"
