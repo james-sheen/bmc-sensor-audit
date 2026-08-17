@@ -12,3 +12,8 @@ venv/
 # inventory disclosure. Redact and rename deliberately before committing one;
 # nothing named `*.capture.json` should ever reach a remote by accident.
 *.capture.json
+
+# Site-specific hygiene vocabulary. Untracked on purpose: a rule that forbids a
+# private name must spell that name out, so committing it here would publish
+# exactly what it exists to protect. See tools/hygiene_check.py.
+.hygiene-local.json

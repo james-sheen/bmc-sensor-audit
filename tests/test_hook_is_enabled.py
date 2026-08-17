@@ -24,6 +24,7 @@ depend on it.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -71,6 +72,20 @@ class TestTheHookItself:
         assert "tools/hygiene_check.py" in body
         assert (ROOT / "tools" / "hygiene_check.py").is_file()
 
+    def test_the_activation_command_is_identical_everywhere_it_appears(self):
+        """It appears twice in the README on purpose — once under Try it, where a
+        reader meets the failure, and once under Hygiene, where the reasoning is.
+        Two copies of a command is two chances to drift, so pin them equal rather
+        than trusting nobody edits one."""
+        readme = (ROOT / "README.md").read_text()
+        occurrences = re.findall(r"git config core\.hooksPath \S+", readme)
+        assert len(occurrences) >= 2, \
+            f"expected the activation command in both sections, found {occurrences}"
+        assert len(set(occurrences)) == 1, \
+            f"the README gives conflicting activation commands: {set(occurrences)}"
+        assert occurrences[0].endswith(EXPECTED), \
+            f"the README activates a different hooks path: {occurrences[0]}"
+
     def test_the_hook_names_its_own_activation_step(self):
         """The one line a reader needs when this test fails must live in the hook
         too, because that is where someone looks after reading the failure."""
@@ -86,6 +101,22 @@ class TestTheServerSideBackstop:
         body = workflow.read_text()
         assert "hygiene_check.py --all" in body, \
             "the workflow does not run the hygiene sweep"
+
+    def test_the_workflow_also_backstops_the_commit_message_hook(self):
+        """Both hooks hang off one `core.hooksPath`, which was unset here for
+        three commits. Backstopping only the file sweep would leave the message
+        check with exactly the weakness that made the sweep's backstop necessary
+        — and a message is the surface no later commit can correct."""
+        body = (ROOT / ".github" / "workflows" / "checks.yml").read_text()
+        assert "commit_msg_check.py" in body, \
+            "CI does not check commit messages; the commit-msg hook has no backstop"
+
+    def test_the_workflow_fetches_enough_history_to_do_that(self):
+        """`actions/checkout` defaults to depth 1, which would silently reduce the
+        message check to the tip commit — passing while checking almost nothing."""
+        body = (ROOT / ".github" / "workflows" / "checks.yml").read_text()
+        assert "fetch-depth: 0" in body, \
+            "shallow checkout: the commit-message step can only see HEAD"
 
     def test_the_workflow_runs_on_push_not_only_on_a_schedule(self):
         """A sibling project's scheduled-only workflow reached zero runs across

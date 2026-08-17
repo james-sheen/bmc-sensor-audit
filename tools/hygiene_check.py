@@ -32,6 +32,7 @@ per-file, so it stays visible at the site and in review.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -82,16 +83,11 @@ RULES = [
     Rule("home_path", r"/(?:home|Users)/[a-z][\w.-]*|/root/[\w.-]+",
          "a path inside somebody's home directory"),
 
-    # 3. Anything naming a system that is not public. Derived from what actually
-    #    sits alongside this repository, not from a generic list.
-    Rule("internal_ticket", r"(?<![\w-])CD-\d{2,}(?![\w-])",
-         "an internal ticket identifier"),
-    # This line carries the marker because a rule whose pattern spells out the
-    # string it forbids matches ITSELF. Any checker that scans its own source has
-    # this problem; the alternative is exempting the whole file, which would then
-    # be the one file where a real credential could sit unnoticed.
-    Rule("private_module", r"k8s[_-]orchestrator|openbmc-bot|\bjgpt\b",  # hygiene: synthetic
-         "a module path from a tree that is not public"),
+    # 3. Anything naming a system that is not public is SITE-SPECIFIC and lives
+    #    in the local vocabulary file, never here. See LOCAL_RULES_FILE below:
+    #    a rule that must spell out a private name in order to forbid it would
+    #    publish that name to everyone who reads this file, which is the exact
+    #    disclosure the rule exists to prevent.
 
     # 4. Hardware identity. THE CLASS THIS PROJECT OWNS, and the reason the file
     #    exists. A Redfish walk of a real machine returns serial numbers, part
@@ -121,8 +117,52 @@ RULES = [
 ]
 
 
+# Site-specific vocabulary lives here, untracked. A rule that forbids a private
+# name has to spell that name out, so keeping such rules in this file would
+# publish exactly what they exist to protect -- and this file is public.
+#
+# Ship generic; each clone supplies its own. Format:
+#
+#     {"rules": [{"name": "internal_ticket",
+#                 "pattern": "(?<![\\w-])CD-\\d{2,}(?![\\w-])",
+#                 "why": "an internal ticket identifier"}]}
+LOCAL_RULES_FILE = ".hygiene-local.json"
+
+
+def load_local_rules(root: Path) -> list[Rule]:
+    """Extra rules from the untracked local vocabulary, or none.
+
+    A missing file is normal and not an error -- but it is REPORTED rather than
+    silent, because losing coverage without being told is how a check becomes
+    decorative. That is the same failure as a hook nobody enabled.
+    """
+    path = root / LOCAL_RULES_FILE
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [Rule(entry["name"], entry["pattern"], entry["why"])
+                for entry in data["rules"]]
+    except (ValueError, KeyError, TypeError, re.error) as error:
+        print(f"hygiene: {path} is unusable ({error}); site rules are NOT active",
+              file=sys.stderr)
+        raise SystemExit(EXIT_ERROR)
+
+
+def active_rules(root: Path) -> list[Rule]:
+    """Everything this clone checks: the shipped generic set plus local."""
+    return RULES + load_local_rules(root)
+
+
 def _is_scannable(path: Path) -> bool:
     if path.suffix.lower() in SKIP_SUFFIXES:
+        return False
+    # The vocabulary file always matches its own patterns -- a rule that forbids
+    # a string has to contain that string. It is gitignored, so it is
+    # structurally incapable of being published, which makes scanning it pure
+    # noise. This is a skip for a file that CANNOT leak, not an exemption for one
+    # that might: the difference is why it is safe.
+    if path.name == LOCAL_RULES_FILE:
         return False
     return not (SKIP_PARTS & set(path.parts))
 
@@ -142,7 +182,10 @@ def _tracked_and_untracked(root: Path) -> list[Path]:
     return [p.relative_to(root) for p in sorted(root.rglob("*")) if p.is_file()]
 
 
-def scan(paths: list[Path], root: Path) -> list[tuple[Path, int, Rule, str]]:
+def scan(paths: list[Path], root: Path,
+         rules: list[Rule] | None = None) -> list[tuple[Path, int, Rule, str]]:
+    if rules is None:
+        rules = active_rules(root)
     hits: list[tuple[Path, int, Rule, str]] = []
     for relative in paths:
         path = root / relative
@@ -155,7 +198,7 @@ def scan(paths: list[Path], root: Path) -> list[tuple[Path, int, Rule, str]]:
         for number, line in enumerate(text.splitlines(), start=1):
             if EXEMPT.search(line):
                 continue
-            for rule in RULES:
+            for rule in rules:
                 found = rule.pattern.search(line)
                 if found:
                     hits.append((relative, number, rule, found.group(0)))
@@ -175,7 +218,15 @@ def main(argv: list[str] | None = None) -> int:
         print("hygiene: nothing to scan")
         return EXIT_CLEAN
 
-    hits = scan(paths, root)
+    local = load_local_rules(root)
+    if local:
+        print(f"hygiene: {len(RULES)} shipped rule(s) + {len(local)} from "
+              f"{LOCAL_RULES_FILE}")
+    else:
+        print(f"hygiene: {len(RULES)} shipped rule(s); no {LOCAL_RULES_FILE}, so "
+              "no site-specific vocabulary is being checked")
+
+    hits = scan(paths, root, rules=RULES + local)
     if not hits:
         print(f"hygiene: {len(paths)} file(s) scanned, nothing found")
         return EXIT_CLEAN

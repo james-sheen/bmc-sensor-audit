@@ -1,9 +1,12 @@
 """Every documented parser finding, reproduced from files in this repository.
 
 Acceptance criterion 1 was proven by a run nobody else could make: the parser
-claims were measured against 247 upstream configurations on a local checkout, by
-path. True, and unverifiable by any reader — which for a claim in a public README
-is the same as unproven.
+claims were measured against upstream configurations on a local checkout, by path
+and at no identifiable revision. True, and unverifiable by any reader — which for
+a claim in a public README is the same as unproven.
+
+The fixtures are now pinned to `0ada048303bb`. The first attempt was not, and within a
+day two of the nine had been renamed upstream and every corpus count had moved.
 
 `tests/fixtures/upstream/` now carries nine of those files verbatim, chosen by
 measuring the corpus for each documented property and taking the smallest file
@@ -18,6 +21,7 @@ third-party content and their whole value is being exactly what upstream ships.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -50,6 +54,18 @@ class TestTheFixturesArePresentAndLicensed:
         assert "Apache License" in body
         assert "Copyright 2018 Intel Corporation" in body
 
+    def test_the_notice_pins_an_upstream_revision(self):
+        """The pin is the whole remedy. Without it these are a snapshot of an
+        unidentifiable revision — which is what the first version of this
+        directory was, and within a day two of its nine files had been renamed
+        upstream with no way for a reader to tell."""
+        notice = (ROOT / "NOTICE").read_text()
+        sha = re.search(r"\b[0-9a-f]{40}\b", notice)
+        assert sha, "NOTICE no longer pins a 40-character upstream commit"
+        readme = (UPSTREAM / "README.md").read_text()
+        assert sha.group(0) in readme, \
+            "NOTICE and the fixture README disagree about the pinned revision"
+
     def test_the_notice_declares_the_redistribution(self):
         """A NOTICE saying nothing upstream is redistributed, beside a directory
         of redistributed upstream files, is the defect this repository keeps
@@ -67,7 +83,7 @@ class TestTheDocumentedFindingsReproduce:
         assert len(corpus.sensors) > 0
 
     def test_block_comments_are_read_not_skipped(self, corpus):
-        """Ten of the 247 are not strict JSON. A tool that skips them reports
+        """Ten of the 349 are not strict JSON. A tool that skips them reports
         their sensors as undeclared rather than unread — a false clean bill of
         health for the whole board."""
         path = UPSTREAM / "meta" / "catalina" / "catalina_osfp.json"
@@ -100,7 +116,7 @@ class TestTheDocumentedFindingsReproduce:
 
         Upstream marks the rails on a pmbus entry with a `Labels` array. This
         parser never reads that key — expansion comes only from threshold
-        labels. Eight entries across four vendored files carry one. A sensor
+        labels. Five entries across four vendored files carry one. A sensor
         declared through `Labels` alone, with no per-rail thresholds, would be
         invisible to this tool.
 
@@ -116,7 +132,7 @@ class TestTheDocumentedFindingsReproduce:
             "sensor was being missed, and update the fixture README's lead"
 
         delta = [s for s in corpus.sensors
-                 if s.source.endswith("delta_awf2dc3200w_psu.json")]
+                 if s.source.endswith("awf2dc3200w_psu.json")]
         assert delta, "the ignored-Labels example declares nothing at all"
         assert not any(s.label for s in delta), \
             "delta now yields labelled sensors; the lead has changed shape"
@@ -124,7 +140,7 @@ class TestTheDocumentedFindingsReproduce:
     @pytest.mark.parametrize("token,filename", [
         ("$index", "8x25_hsbp.json"),
         ("$ipmbindex", "twinlake.json"),
-        ("$bus", "santabarbara_sitv_eth.json"),
+        ("$bus", "cx7_mezzanine_module.json"),
     ])
     def test_each_runtime_template_variable_is_recognised(self, corpus, token, filename):
         named = [s for s in corpus.sensors if s.source.endswith(filename)]
@@ -137,7 +153,7 @@ class TestTheDocumentedFindingsReproduce:
         greedy variable pattern ate the whole token and degenerated into a
         match-anything expression."""
         names = [s.name for s in corpus.sensors
-                 if s.source.endswith("santabarbara_sitv_eth.json")]
+                 if s.source.endswith("cx7_mezzanine_module.json")]
         compound = [n for n in names if "$bus_" in n]
         assert compound, "the compound-template fixture no longer exercises the case"
 
@@ -146,7 +162,7 @@ class TestTheDocumentedFindingsReproduce:
         and the case the tool exists for. It must not be dropped at read time."""
         disabled = [s for s in corpus.sensors if s.disabled_in_config]
         assert disabled, "no disabled-in-config sensor survived the read"
-        assert all(s.source.endswith("asrock_spc621d8hm3.json") for s in disabled)
+        assert all(s.source.endswith("spc621d8hm3.json") for s in disabled)
 
     @pytest.mark.parametrize("filename,bound", [("fbyv2.json", "105"),
                                                 ("fbyv35.json", "55")])
@@ -176,7 +192,7 @@ class TestTheGapsAreStated:
         body = (UPSTREAM / "README.md").read_text()
         assert "What these do NOT cover" in body
         assert "$Name" in body, "the uncovered template variable is not named"
-        assert "No upstream revision is pinned" in body
+        assert "0ada048303bb" in body, "the fixture README no longer states the pin"
 
     def test_the_name_variable_is_genuinely_absent_here(self, corpus):
         """Pins the gap itself. If a later fixture adds `$Name` coverage, this

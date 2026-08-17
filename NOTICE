@@ -30,11 +30,16 @@ their sources. `tests/fixtures/upstream/README.md` records which documented
 finding each one reproduces, why these nine were chosen, and what they do not
 cover.
 
-No upstream commit is pinned, and that is a real limitation rather than an
-oversight: the corpus these were copied from carries no independent version
-control metadata in the environment they were taken from, so there is no revision
-to name. They are a snapshot of unknown upstream revision, and any claim measured
-against them is a claim about that snapshot.
+Pinned to upstream commit:
+
+    0ada048303bb007c9d7ec3a6a90433169f05dd99
+
+Pinning was not the original state, and the reason it is now is worth recording:
+the first snapshot came from a local checkout with no version control metadata,
+so no revision could be named — and by the time anyone looked, two of the nine
+files had been renamed upstream and every corpus count had moved. An unpinned
+snapshot of third-party content does not stay a snapshot; it becomes a claim
+about a revision nobody can identify.
 
 At Stage 2 this project depends on `arbiter-engine`, which is separately
 licensed under the same terms. It is a consumer of that package and not a part

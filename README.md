@@ -27,14 +27,14 @@ installable from an index, and there is no tagged version.
 
 | | |
 |---|---|
-| Declaration reader | working — 247/247 upstream configs parse |
+| Declaration reader | working — 349/349 upstream configs parse at the pinned revision |
 | Redfish walk | working — both tree shapes, standard library only |
 | Coverage diff | working — three-way classification, thresholds, reverse direction |
 | Walk capture | working — `capture` writes a walk for a before/after gate |
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
-| Hygiene check | working — 10 rules, versioned pre-commit hook, plus a CI sweep the hook cannot be forgotten past |
-| Tests | 136 collected, all passing or skipped |
+| Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
+| Tests | 161 collected, all passing or skipped |
 | Liveness detection (Stage 2) | not started |
 | Fleet comparison (Stage 3) | not started |
 
@@ -67,6 +67,18 @@ pip install -e .
 bmc-sensor-audit declare --config <entity-manager-configs>
 ```
 
+**Going to run the test suite? Enable the hook first.**
+
+```
+git config core.hooksPath .githooks
+```
+
+The suite **fails without it, deliberately** — the pre-commit hygiene check cannot
+install itself, so an unenabled hook is silent, and silence is the one thing a
+safety check must never be. Full reasoning under [Hygiene](#hygiene). This line is
+here rather than only there because a reader meets the red before they reach the
+explanation.
+
 `--config` takes a file or a directory, repeatably; a directory is walked
 recursively, because a platform's declaration is normally several files and
 asking someone to enumerate them invites them to miss one.
@@ -91,23 +103,31 @@ watches readings**, and running the reader across the upstream corpus found two.
 
 ## What reading the real configs changed
 
-The parser is shaped by measuring 247 upstream configuration files rather than
-by reading the format documentation. Five things the documented example does not
-prepare you for, each of which silently corrupts a naive implementation:
+The parser is shaped by measuring the upstream configuration corpus rather than
+by reading the format documentation. Every number below was derived at
+`openbmc/entity-manager@0ada0483` — **349 files** — and is stated with that basis
+because a count without one cannot be re-derived, only believed.
+
+Five things the documented example does not prepare you for, each of which
+silently corrupts a naive implementation:
 
 - **Ten of the files are not strict JSON.** They carry C-style block comments.
   A tool that skips unparseable files reports their sensors as *undeclared*
   rather than *unread* — a false clean bill of health for the whole board.
-- **The top level is an object in 178 files and an array in 59.**
+- **The top level is an object in 264 files and an array in 75**, with the
+  remaining ten being the JSONC files above, whose top level a strict parser
+  never sees at all.
 - **One `Exposes` entry can declare several sensors.** Hot-swap controllers carry
-  a `Label` per rail; 748 entries use them and one has 33. Counting entries
-  counts boards, not sensors.
-- **Roughly one name in eight is a runtime template** (`$bus`, `$address`,
-  `$index`). Compared literally, about 470 sensors read as missing on every
-  healthy board. `CONFIG_FORMAT.md` documents three such variables; the corpus
-  uses five.
+  a `Label` per rail; 1,132 entries use them and one declares 33. Counting
+  entries counts boards, not sensors. **The expansion comes from per-threshold
+  `Label` fields, not from an entry's `Labels` array** — which this parser does
+  not read at all, and which is an open question rather than a settled one.
+- **709 of 8,684 declared sensor names are runtime templates** — about one in
+  twelve (`$bus`, `$address`, `$index`). Compared literally, every one of them
+  reads as missing on a healthy board. `CONFIG_FORMAT.md` documents three such
+  variables; the corpus uses five.
 - **The threshold-name vocabulary has fifteen spellings, not four.** `Direction`
-  has exactly two values across all 10,687 thresholds, so it — not the name — is
+  has exactly two values across all 15,860 thresholds, so it — not the name — is
   what decides which side a threshold guards. A name whose severity level is
   unrecognised is reported rather than discarded: a closed enum with a missing
   member misclassifies confidently instead of failing.
@@ -156,8 +176,44 @@ Hence two more layers, because one opt-in step is not a gate:
 - **The test suite fails if the hook is not enabled in your clone**, so you find
   out in one line rather than not at all.
 
-Ten rules, each with a test that plants its hazard and a test that keeps it quiet
-on something similar and harmless. The second half is what keeps the check
+There is a second hook. **A commit message is the one published surface that can
+never be corrected** — a file can be fixed in the next commit, a message cannot —
+and the file-scanning check could not see it. `commit-msg` runs the same rules
+over the message, so a token or an internal identifier cannot reach permanent
+history through the only door with no lock on it. It also refuses a few objective
+things: an over-long subject, a trailing full stop, a missing blank line, and this
+project's *internal* commit format, which carries identifiers that must not be
+published.
+
+It deliberately does **not** enforce imperative mood. The convention is real —
+`git revert` composes a sentence around your subject, so a declarative one inverts
+— but it is not checkable: the clearest violation here began with the word
+`declare`, which any first-word heuristic reads as a perfect imperative. A rule
+that refuses honest messages gets `--no-verify`d, and that switches off the leak
+rules too. So it is documented and left to judgement. For the same reason a
+suspicious bare number is a **note**, not a refusal: measured against real history
+the rule flagged five numbers and two were legitimate.
+
+Security reports go through [SECURITY.md](SECURITY.md) — privately, because for
+this project the report is often the disclosure.
+
+Eight shipped rules, each with a test that plants its hazard and a test that
+keeps it quiet on something similar and harmless.
+
+**Site-specific rules do not ship.** A rule that forbids a private name has to
+spell that name out, so keeping such rules in tracked source would publish exactly
+what they exist to protect — in the file whose job is preventing that. They live
+in an untracked `.hygiene-local.json` instead, loaded if present:
+
+```
+{"rules": [{"name": "internal_ticket",
+            "pattern": "(?<![\\w-])XY-\\d{2,}(?![\\w-])",
+            "why": "an internal ticket identifier"}]}
+```
+
+Every run says which vocabulary is active, because a check that quietly stops
+looking for half of what it knows is worse than one that never knew. An unreadable
+vocabulary file is a hard error rather than a reduced run, for the same reason. The second half is what keeps the check
 usable: a rule that goes red for a legitimate reason on every run teaches
 everybody to skip the whole thing.
 
@@ -184,10 +240,11 @@ a diff is safe to publish.
   are.** Nine upstream configurations are vendored verbatim under
   `tests/fixtures/upstream/`, with Intel's copyright and the upstream licence
   carried alongside, and every documented parser finding is now runnable from a
-  clone. What they cannot reproduce are the counts — 247 files, 5,496 sensors,
-  661 templated names, 10,687 thresholds — which come from the full corpus and
-  remain measurements against a checkout only we have. **No upstream revision is
-  pinned**, because there was no version-control metadata to read.
+  clone, **pinned to `0ada048303bb007c9d7ec3a6a90433169f05dd99`**. What they
+  cannot reproduce are the corpus-wide counts — 349 files, 8,684 sensors, 709
+  templated names, 15,860 thresholds — which need the full corpus. The first
+  attempt at this directory was unpinned, and within a day two of its nine files
+  had been renamed upstream and every count had moved; the shapes did not.
   `tests/fixtures/upstream/README.md` records what each file is for, what the set
   does not cover, and one open lead it found.
 - **The recorded walk fixtures are synthetic.** See the Status note. Both tree

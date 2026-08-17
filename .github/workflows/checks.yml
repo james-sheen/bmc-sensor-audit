@@ -25,6 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the commit-message step needs the commits in this push,
+          # and the default depth of 1 would leave it checking only the tip.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -35,6 +39,30 @@ jobs:
         # staged diff. This is the backstop for every commit made from a clone
         # where the hook was never enabled.
         run: python3 tools/hygiene_check.py --all
+
+      - name: Commit messages
+        # The second hook's backstop. `commit-msg` can be forgotten exactly as
+        # `pre-commit` was -- both hang off one `core.hooksPath` that was unset
+        # here for three commits -- and a message is the one surface no later
+        # commit can correct. So the same check runs on the server.
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha || github.event.before || '' }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no usable base ref; checking HEAD only"
+            LIST=$(git rev-parse HEAD)
+          else
+            LIST=$(git rev-list "$BASE..${{ github.sha }}")
+            echo "checking $(echo "$LIST" | grep -c . ) commit message(s) in $BASE..${{ github.sha }}"
+          fi
+          FAILED=0
+          for SHA in $LIST; do
+            git log -1 --format=%B "$SHA" > /tmp/msg.txt
+            echo "--- $SHA"
+            python3 tools/commit_msg_check.py /tmp/msg.txt || FAILED=1
+          done
+          exit $FAILED
 
       - name: Tests
         # NOT pip-installed first, deliberately. One test asserts that the bare

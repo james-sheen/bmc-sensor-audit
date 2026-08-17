@@ -1,0 +1,13 @@
+#!/bin/sh
+# Check the commit message before it becomes permanent.
+#
+# Activated by the same setting as the pre-commit hook:
+#     git config core.hooksPath .githooks
+#
+# A message is the one published surface that can never be corrected. The hygiene
+# check guards files and cannot see the message; this runs the same rules over it.
+#
+# To commit past it knowingly:   git commit --no-verify
+# Note that --no-verify also disables the pre-commit hygiene sweep. That is why
+# this hook refuses only on objective problems and merely notes the heuristic one.
+exec python3 "$(git rev-parse --show-toplevel)/tools/commit_msg_check.py" "$1"
