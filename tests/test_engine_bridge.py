@@ -21,7 +21,10 @@ locally — CI installs the engine, which is where this is a gate rather than a 
 
 from __future__ import annotations
 
+import importlib.metadata
 import math
+import pathlib
+import re
 
 import pytest
 
@@ -31,6 +34,63 @@ engine_api = pytest.importorskip(
     reason="arbiter-engine is the optional [detect] extra; Stage 1 does not require it")
 
 from arbiter_engine.api import EngineSession, check, model_describe  # noqa: E402
+
+
+def _require_the_pinned_engine() -> None:
+    """Presence and correctness are different questions.
+
+    The `importorskip` above answers whether an engine is installed and says nothing
+    about WHICH one. Measured with a stale 0.1.0 present: this module produces six raw
+    assertion errors about payload locations and stuck-at -- code-shaped failures for
+    an environment-shaped cause, which cost a real diagnosis this week on an
+    environment that violated the project's own rule about assessing the version the
+    consumer pins.
+
+    Absent stays a skip: Stage 1 does not require the engine and must run on a bench
+    with nothing provisioned. Present-but-outside-the-pin fails deliberately, because
+    it is an environment error and silence about it is what made the six failures
+    expensive.
+
+    The range is read from `pyproject.toml` rather than repeated here. A copy of the
+    pin is a pin that can drift, which is the same class of cause as the parametrize
+    list that let the exit-0 defect ship.
+    """
+    pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pin = re.search(r'"arbiter-engine>=([0-9.]+),<([0-9.]+)"', pyproject.read_text())
+    if pin is None:
+        pytest.fail(f"could not find the arbiter-engine pin in {pyproject}. If the pin "
+                    "was reworded, update this pattern -- this guard fails loudly "
+                    "rather than silently checking nothing", pytrace=False)
+    floor, ceiling = pin.groups()
+    installed = importlib.metadata.version("arbiter-engine")
+
+    def parts(version: str) -> tuple[int, ...]:
+        return tuple(int(piece) for piece in version.split("."))
+
+    try:
+        outside = not parts(floor) <= parts(installed) < parts(ceiling)
+    except ValueError:
+        # A pre-release or local version. The pin scheme is plain X.Y.Z, so anything
+        # else is outside it by construction rather than by comparison.
+        outside = True
+    if outside:
+        pytest.fail(
+            f"arbiter-engine {installed} is installed but this project pins "
+            f">={floor},<{ceiling}. Environment error, not a code failure: "
+            f"pip install --upgrade 'bmc-sensor-audit[detect]'", pytrace=False)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _the_engine_is_the_pinned_one():
+    """Module-scoped, deliberately not module-LEVEL.
+
+    A failure raised at import time is a collection error, and a collection error
+    interrupts the whole session -- taking Stage 1 down with it, which needs no engine
+    at all. As an autouse fixture the red is confined to this module and the rest of
+    the suite still runs and still reports.
+    """
+    _require_the_pinned_engine()
+
 
 WARN, CRIT = 10.0, 20.0
 STUCK_AT_SAMPLES = 30          # floor measured at ~10; 30 is comfortably clear of it
