@@ -34,8 +34,8 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 209 in the dependency-free suite; the `[detect]` extra adds an engine canary |
-| Liveness detection (Stage 2) | generator working — declaration to engine domain model, with a manifest of what it left out |
+| Tests | 230 in the dependency-free suite; the `[detect]` extra adds an engine canary |
+| Liveness detection (Stage 2) | generator + feeder working — model from declarations, readings fed, envelope mapped to an exit code |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now

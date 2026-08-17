@@ -215,3 +215,44 @@ class TestExpectVariationIsAChoice:
         indicators = [i for inds in model["domain"]["indicators"].values() for i in inds]
         assert not any(i.get("expect_variation") for i in indicators)
         assert manifest.expect_variation is False
+
+
+class TestGeneratedOutputIsSubjectToTheHygieneRules:
+    """A generated model is a new artifact, and artifacts are where hardware identity
+    escapes. Sensor names travel from the declaration into entity-type names and into
+    the manifest, so the same rules that guard the repository guard the output.
+
+    This is a test rather than a runtime call because `tools/` is not part of the
+    package — Stage 1 ships no scanner. It still catches the real case: a declaration
+    carrying a literal serial, part number or asset tag in a sensor name would put it
+    straight into a model somebody commits.
+    """
+
+    def test_the_model_generated_from_the_corpus_is_clean(self, built, tmp_path):
+        import yaml
+        sys.path.insert(0, str(ROOT / "tools"))
+        import hygiene_check
+
+        _, model, manifest = built
+        artifact = tmp_path / "generated.yaml"
+        artifact.write_text(yaml.safe_dump(model))
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest.to_dict()))
+
+        paths = [p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file()]
+        hits = hygiene_check.scan(paths, tmp_path, rules=hygiene_check.RULES)
+        assert hits == [], "\n".join(f"{h[0]}:{h[1]} [{h[2].name}]" for h in hits)
+
+    def test_the_scan_would_catch_an_identity_bearing_name(self, tmp_path):
+        """The paired positive. Without it the test above passes because the corpus
+        happens to be clean, not because anything is being checked."""
+        import yaml
+        sys.path.insert(0, str(ROOT / "tools"))
+        import hygiene_check
+
+        artifact = tmp_path / "generated.yaml"
+        artifact.write_text(yaml.safe_dump(
+            {"domain": {"id": "x",
+                        "note": '{"SerialNumber": "CN7082019L003A"}'}}))  # hygiene: synthetic
+        hits = hygiene_check.scan([Path("generated.yaml")], tmp_path,
+                                  rules=hygiene_check.RULES)
+        assert [h[2].name for h in hits] == ["redfish_inventory_field"]

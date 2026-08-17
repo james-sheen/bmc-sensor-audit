@@ -207,3 +207,103 @@ class TestTheGeneratedModelIsAcceptedWhole:
         assert findings, f"{sensor.declared_name} below {sensor.lower[1]} produced nothing"
         translated = manifest.translate_finding(findings[0])
         assert "BELOW" in translated and sensor.declared_name in translated, translated
+
+
+class TestTheWholeStage2PathEndToEnd:
+    """Declaration to exit code, through the real engine.
+
+    Everything else in this file tests one seam. This runs the chain a user would:
+    read the configs, generate the model, walk the machine, feed what is reading, and
+    turn the envelope into a number CI can act on.
+    """
+
+    @staticmethod
+    def _run(walks, *, strict=False):
+        import sys
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(root / "src"))
+        from bmc_sensor_audit.detect.feeder import evaluate, feed
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.diff import compare
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        from bmc_sensor_audit.inventory.redfish import walk_from_dict
+
+        declaration = load_declaration([str(root / "tests" / "fixtures" / "upstream")])
+        model, manifest = generate(declaration)
+        import tempfile
+        path = Path(tempfile.mkdtemp()) / "model.yaml"
+        path.write_text(yaml.safe_dump(model))
+        session = EngineSession()
+        session.load_model(str(path))
+
+        reports = []
+        for entries in walks:
+            walk = walk_from_dict({
+                "format": "bmc-sensor-audit/walk/1", "chassis": ["/c/1"],
+                "shapes_seen": ["sensors"], "errors": [],
+                "sensors": [{"name": n, "path": f"/c/1/S/{i}", "reading": v,
+                             "state": "Enabled", "health": "OK", "thresholds": {}}
+                            for i, (n, v) in enumerate(entries)]})
+            reports.append(compare(declaration, walk))
+
+        result = feed(session, manifest, reports)
+        outcome = evaluate(check(session).to_dict(), model_describe(session).to_dict(),
+                           manifest, strict_declines=strict)
+        return manifest, result, outcome
+
+    def _pick(self, manifest):
+        return next(s for s in manifest.sensors if s.has_lower and s.upper[0] is not None)
+
+    def test_a_healthy_reading_passes_and_says_liveness_is_warming_up(self):
+        """One walk is one sample. The gate passes, and the report can say so rather
+        than implying it checked liveness from the first walk."""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        _, manifest = generate(load_declaration(
+            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]))
+        sensor = self._pick(manifest)
+        midpoint = (sensor.upper[0] + sensor.lower[0]) / 2
+
+        _, result, outcome = self._run([[(sensor.declared_name, midpoint)]])
+        assert outcome.exit_code == 0, outcome.findings + outcome.core_case_declines
+        assert result.warming_up, "liveness reported no warm-up on a single walk"
+        assert outcome.data_declines, "the insufficient-sample decline was suppressed"
+
+    def test_a_reading_below_its_floor_fails_with_translated_text(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        _, manifest = generate(load_declaration(
+            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]))
+        sensor = self._pick(manifest)
+
+        _, _, outcome = self._run([[(sensor.declared_name, sensor.lower[1] - 0.1)]])
+        assert outcome.exit_code == 1
+        assert any("BELOW" in f and sensor.declared_name in f for f in outcome.findings), \
+            outcome.findings
+
+    def test_a_frozen_series_is_caught_once_history_is_deep_enough(self):
+        """The Stage 2 mission, through the whole chain: a sensor still reporting a
+        plausible in-range value whose series has not moved."""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from bmc_sensor_audit.detect.feeder import STUCK_AT_SAMPLE_FLOOR
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        _, manifest = generate(load_declaration(
+            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]))
+        sensor = self._pick(manifest)
+        stuck = (sensor.upper[0] + sensor.lower[0]) / 2
+
+        walks = [[(sensor.declared_name, stuck)] for _ in range(STUCK_AT_SAMPLE_FLOOR * 3)]
+        _, result, outcome = self._run(walks)
+        assert not result.warming_up, "history did not accumulate past the floor"
+        assert outcome.exit_code == 1, "a frozen sensor passed the gate"
+        assert outcome.findings, "no finding for a series that never moved"

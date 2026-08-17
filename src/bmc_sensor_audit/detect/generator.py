@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ..inventory import sensor_types
 from ..inventory.entity_manager import ANY_TEMPLATE, Declaration, DeclaredSensor
@@ -108,6 +109,35 @@ class Manifest:
         for reason, names in self.excluded.items():
             counts[f"excluded_{reason}"] = len(names)
         return counts
+
+    def to_dict(self) -> dict:
+        """A serialisable manifest, with source paths reduced to file names.
+
+        **The full path is deliberately not emitted.** A manifest is an artifact
+        somebody commits, and the declaration's `source` is an absolute path on the
+        machine that generated it, a path under somebody's home directory. The name
+        answers the question a reader actually has (which configuration declared this
+        sensor); the directory above it only identifies the person who ran the tool.
+
+        Found by running this project's own hygiene rules over generated output, which
+        is the whole reason that check exists: a new artifact is a new way for identity
+        to escape, and the model and manifest were both new today.
+        """
+        return {
+            "domain_id": self.domain_id,
+            "expect_variation": self.expect_variation,
+            "counts": self.counts(),
+            "sensors": [{"entity_type": s.entity_type,
+                         "declared_name": s.declared_name,
+                         "source": Path(s.source).name if s.source else None,
+                         "upper": list(s.upper),
+                         "lower": list(s.lower),
+                         "unmapped_levels": [list(u) for u in s.unmapped_levels]}
+                        for s in self.sensors],
+            "excluded": {reason: list(names)
+                         for reason, names in self.excluded.items()},
+            "anomalies": list(self.anomalies),
+        }
 
     def type_for(self, declared_name: str) -> str | None:
         for sensor in self.sensors:
