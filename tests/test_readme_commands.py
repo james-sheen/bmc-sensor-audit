@@ -20,6 +20,7 @@ That is the point.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -29,6 +30,23 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
+
+
+def _env(**overrides) -> dict:
+    """The current environment with PYTHONPATH removed, plus any overrides.
+
+    These tests used to pass `env={"PATH": "/usr/bin:/bin"}`, replacing the
+    environment wholesale. That is invisible locally, where `/usr/bin/python3`
+    needs nothing else to start — and it broke on the first CI run, because a
+    tool-cache interpreter installed by `setup-python` relies on variables the
+    wholesale replacement threw away.
+
+    The intent was only ever *PYTHONPATH is not set*. Express that, and leave the
+    rest of the environment alone.
+    """
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    environment.update(overrides)
+    return environment
 
 # Placeholders the README uses for things a reader must supply. A command
 # carrying one cannot be run here; it is checked for shape instead.
@@ -87,7 +105,7 @@ def test_the_documented_invocation_runs_from_a_directory_with_no_checkout(tmp_pa
     result = subprocess.run(
         [sys.executable, "-m", "bmc_sensor_audit.cli", *argv],
         cwd=tmp_path, capture_output=True, text=True,
-        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT / "src")})
+        env=_env(PYTHONPATH=str(ROOT / "src")))
 
     assert result.returncode == 0, result.stderr
     assert "sensors declared" in result.stdout
@@ -103,7 +121,7 @@ def test_the_bare_command_without_pythonpath_still_fails(tmp_path):
     result = subprocess.run(
         [sys.executable, "-m", "bmc_sensor_audit.cli", "--help"],
         cwd=tmp_path, capture_output=True, text=True,
-        env={"PATH": "/usr/bin:/bin"})
+        env=_env())
     assert result.returncode != 0
     assert "No module named" in result.stderr
 

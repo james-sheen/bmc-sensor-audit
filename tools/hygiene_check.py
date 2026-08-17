@@ -101,8 +101,21 @@ RULES = [
     #    that go around it.
     Rule("mac_address", r"(?<![\w:])(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?![\w:])",
          "a MAC address, which identifies one physical machine"),
+    # The value must not be a bare `$TEMPLATE` reference. Upstream entity-manager
+    # configurations write `"SerialNumber": "$BOARD_SERIAL_NUMBER"` -- a
+    # substitution the BMC fills in at runtime, which by construction carries no
+    # machine's identity. Vendoring nine of them produced 18 findings of exactly
+    # that shape, and the alternatives were both worse than narrowing the rule:
+    # the files are third-party and must stay verbatim, so a per-line marker
+    # cannot be added, and a per-directory exemption would create precisely the
+    # unwatched corner this checker's own design forbids.
+    #
+    # The narrowing is deliberately the smallest one that works. A value that is
+    # ENTIRELY one `$identifier` is a placeholder; anything else -- including
+    # `Unknown` and a real part number -- still fires.
     Rule("redfish_inventory_field",
-         r"\"(?:SerialNumber|PartNumber|AssetTag|SKU|SparePartNumber|UUID)\"\s*:\s*\"[^\"]+\"",
+         r"\"(?:SerialNumber|PartNumber|AssetTag|SKU|SparePartNumber|UUID)\""
+         r"\s*:\s*\"(?!\$[A-Za-z_]\w*\")[^\"]+\"",
          "a Redfish inventory field with a value. A committed chassis walk is a "
          "fleet inventory disclosure; capture the parsed sensor set instead"),
 ]

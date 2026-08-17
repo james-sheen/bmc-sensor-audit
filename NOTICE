@@ -13,8 +13,28 @@ CONDITIONS OF ANY KIND, either express or implied.
 
 This project reads OpenBMC `entity-manager` configuration files and walks the
 DMTF Redfish API. It is not affiliated with, endorsed by, or part of the OpenBMC
-project or DMTF. No configuration file from any upstream repository is
-redistributed here.
+project or DMTF.
+
+REDISTRIBUTED THIRD-PARTY CONTENT
+
+`tests/fixtures/upstream/` contains nine configuration files copied verbatim from
+the OpenBMC `entity-manager` project:
+
+    Copyright 2018 Intel Corporation
+    Licensed under the Apache License, Version 2.0
+    https://github.com/openbmc/entity-manager
+
+Their licence is reproduced unmodified at `tests/fixtures/upstream/LICENCE`,
+spelled as upstream spells it. The nine files are unmodified and byte-identical to
+their sources. `tests/fixtures/upstream/README.md` records which documented
+finding each one reproduces, why these nine were chosen, and what they do not
+cover.
+
+No upstream commit is pinned, and that is a real limitation rather than an
+oversight: the corpus these were copied from carries no independent version
+control metadata in the environment they were taken from, so there is no revision
+to name. They are a snapshot of unknown upstream revision, and any claim measured
+against them is a claim about that snapshot.
 
 At Stage 2 this project depends on `arbiter-engine`, which is separately
 licensed under the same terms. It is a consumer of that package and not a part

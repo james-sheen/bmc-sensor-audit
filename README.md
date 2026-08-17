@@ -34,11 +34,14 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 10 rules, versioned pre-commit hook, plus a CI sweep the hook cannot be forgotten past |
-| Tests | 111 collected, all passing or skipped |
+| Tests | 136 collected, all passing or skipped |
 | Liveness detection (Stage 2) | not started |
 | Fleet comparison (Stage 3) | not started |
 
-**Acceptance criteria, honestly**: 1, 3 and 4 are met. **Criterion 2 is met only
+**Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
+reproducible by a reader** rather than only by us — nine upstream configurations
+are vendored, and each documented finding has a test that runs against them.
+**Criterion 2 is met only
 against synthetic fixtures** — both tree shapes are proven, but by fixtures this
 project's own mock generated, so the same code wrote and read them. That proves
 the walker handles each shape and that the recorded format round-trips; it
@@ -177,14 +180,16 @@ a diff is safe to publish.
 
 ## Still open
 
-- **Upstream configurations are not vendored, and now could be.** The suite
-  builds its configurations inline; the 247-file corpus runs are against a local
-  checkout by path, so acceptance criterion 1 is currently proven by a run
-  nobody else can reproduce. `entity-manager` is Apache-2.0 and copyright Intel,
-  so vendoring a handful under `tests/fixtures/upstream/` is now permitted — it
-  needs their copyright notice carried alongside, and `NOTICE` updating to say
-  what was included and from where. That statement is accurate precisely because
-  nothing is vendored; it stops being accurate the moment something is.
+- **The corpus-wide totals are still not reproducible, though the findings now
+  are.** Nine upstream configurations are vendored verbatim under
+  `tests/fixtures/upstream/`, with Intel's copyright and the upstream licence
+  carried alongside, and every documented parser finding is now runnable from a
+  clone. What they cannot reproduce are the counts — 247 files, 5,496 sensors,
+  661 templated names, 10,687 thresholds — which come from the full corpus and
+  remain measurements against a checkout only we have. **No upstream revision is
+  pinned**, because there was no version-control metadata to read.
+  `tests/fixtures/upstream/README.md` records what each file is for, what the set
+  does not cover, and one open lead it found.
 - **The recorded walk fixtures are synthetic.** See the Status note. Both tree
   shapes are proven against fixtures this project's own mock generated, which
   proves the walker and not the shapes.

@@ -59,6 +59,24 @@ NEAR_MISSES = [
     'PARTIAL = "de:ad:be"',                  # not a MAC
     '{"SerialNumber": ""}',                  # a field with no value in it
     'path = "/rootkit/thing"',               # not a home directory
+    # Upstream entity-manager writes runtime substitutions into inventory fields.
+    # The BMC fills these in; the file carries no machine's identity. Vendoring
+    # nine upstream configs produced 18 findings of exactly this shape.
+    '{"SerialNumber": "$BOARD_SERIAL_NUMBER"}',
+    '{"PartNumber": "$PRODUCT_PART_NUMBER"}',
+]
+
+# Values that LOOK like the placeholder above and are not. The narrowing that
+# admits `$BOARD_SERIAL_NUMBER` must not admit these, or it stops being a rule.
+# Every line here fires by design, so every line carries its own marker. Without
+# them this file matches its own rule and `test_the_repository_itself_is_clean`
+# goes red -- the third time a checker in this repo has found its own test data.
+NOT_PLACEHOLDERS = [
+    '{"SerialNumber": "CN7082019L003A"}',              # hygiene: synthetic
+    '{"SparePartNumber": "05-100051"}',                # hygiene: synthetic
+    '{"SerialNumber": "$BOARD_SERIAL_NUMBER extra"}',  # hygiene: synthetic
+    '{"SerialNumber": "prefix$BOARD_SERIAL_NUMBER"}',  # hygiene: synthetic
+    '{"AssetTag": "Unknown"}',                         # hygiene: synthetic
 ]
 
 
@@ -82,6 +100,20 @@ def test_each_rule_fires_on_its_hazard(name, tmp_path):
 @pytest.mark.parametrize("line", NEAR_MISSES)
 def test_near_misses_stay_quiet(line, tmp_path):
     assert _scan(tmp_path, line) == []
+
+
+@pytest.mark.parametrize("line", NOT_PLACEHOLDERS)
+def test_the_template_narrowing_did_not_open_a_hole(line, tmp_path):
+    """The paired negative for the placeholder exemption above.
+
+    Narrowing a rule to admit `$BOARD_SERIAL_NUMBER` is only safe while it keeps
+    refusing everything else. Without these, the exemption could widen to any
+    value containing a template and nothing would notice — an exemption with no
+    boundary test is how a rule quietly stops being one.
+    """
+    hits = _scan(tmp_path, line)
+    assert [hit[2].name for hit in hits] == ["redfish_inventory_field"], \
+        f"the narrowing let this through: {line}"
 
 
 def test_the_exemption_marker_silences_a_line(tmp_path):

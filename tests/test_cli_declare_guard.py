@@ -18,6 +18,7 @@ red for a legitimate reason and everybody learns to ignore the exit code.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,7 +45,19 @@ def _declare(*paths: Path) -> subprocess.CompletedProcess:
     for path in paths:
         argv += ["--config", str(path)]
     return subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True,
-                          env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(SRC)})
+                          env=_env())
+
+
+def _env() -> dict:
+    """Current environment with PYTHONPATH pointed at src/.
+
+    Not a wholesale replacement: stripping the environment breaks a tool-cache
+    interpreter on a CI runner, which is how the first CI run failed while every
+    local run passed.
+    """
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(SRC)
+    return environment
 
 
 def _write(directory: Path, name: str, payload: dict) -> Path:
@@ -135,5 +148,5 @@ class TestExitCodesAreTheContract:
         if command == "coverage":
             argv += ["--walk", str(ROOT / "tests" / "fixtures" / "walk_sensors_tree.json")]
         result = subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True,
-                                env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(SRC)})
+                                env=_env())
         assert result.returncode == 2, f"{command} returned {result.returncode}"
