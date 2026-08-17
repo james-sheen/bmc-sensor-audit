@@ -201,8 +201,12 @@ def test_config_disabled_sensors_are_not_expected_by_default():
     """94 upstream entries carry Status: disabled. Reporting each as missing on
     a healthy board is the every-run-red noise that teaches people to stop
     reading the report."""
-    config = {"Exposes": [{"Name": "Fan connector 1", "Status": "disabled"},
-                          {"Name": "Inlet Temp"}]}
+    # Real entries always carry a Type -- zero of 5,332 upstream entries omit it --
+    # and the Type filter now uses it, so a typeless fixture would exercise the
+    # unrecognised path instead of the disabled one.
+    config = {"Exposes": [{"Name": "Fan connector 1", "Type": "I2CFan",
+                           "Status": "disabled"},
+                          {"Name": "Inlet Temp", "Type": "TMP75"}]}
     walk = _walk({"Name": "Inlet Temp", "Reading": 22.0})
     assert compare(_declaration(config), walk).findings == []
     opted_in = compare(_declaration(config), walk, include_disabled_in_config=True)

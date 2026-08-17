@@ -36,6 +36,7 @@ from .entity_manager import (
     ANY_TEMPLATE, KNOWN_TEMPLATE, Declaration, DeclaredSensor,
 )
 from .redfish import LiveSensor, Walk
+from . import sensor_types
 
 __all__ = ["Finding", "Match", "DiffReport", "compare"]
 
@@ -87,6 +88,10 @@ class DiffReport:
     unmatched_live: list[LiveSensor] = field(default_factory=list)
     walk_complete: bool = True
     absence_withheld: bool = False
+    # Declarations excluded from expectation because their Type does not produce a
+    # reading, keyed by kind. Reported, never silently dropped -- an exclusion
+    # nobody can see is indistinguishable from a checker that forgot to look.
+    not_sensor_kinds: dict[str, list] = field(default_factory=dict)
 
     @property
     def regressions(self) -> list[Finding]:
@@ -106,6 +111,8 @@ class DiffReport:
             "present_not_reading": len(self.matches) - reading,
             "declared_absent": len(self.unmatched_declared),
             "undeclared_present": len(self.unmatched_live),
+            "not_a_sensor": len(self.not_sensor_kinds.get(sensor_types.NOT_A_SENSOR, [])),
+            "unrecognised_type": len(self.not_sensor_kinds.get(sensor_types.UNRECOGNISED, [])),
             "findings": len(self.findings),
             "regressions": len(self.regressions),
         }
@@ -227,6 +234,21 @@ def _close(a: float, b: float, *, rel: float = 1e-6) -> bool:
     return abs(a - b) <= rel * max(1.0, abs(a), abs(b))
 
 
+def _classify_excluded(declared: list) -> dict:
+    """Group the declarations that will not be expected live, by why.
+
+    Returned rather than discarded so the report can say how many entries were set
+    aside and on what grounds. A filter whose output nobody can inspect is a filter
+    nobody can challenge.
+    """
+    excluded: dict = {}
+    for sensor in declared:
+        kind = sensor_types.classify(sensor.type)
+        if kind != sensor_types.SENSOR:
+            excluded.setdefault(kind, []).append(sensor)
+    return excluded
+
+
 def compare(declaration: Declaration, walk: Walk, *,
             include_disabled_in_config: bool = False) -> DiffReport:
     """Diff a declaration against a walk.
@@ -258,6 +280,21 @@ def compare(declaration: Declaration, walk: Walk, *,
 
     if not include_disabled_in_config:
         unmatched_declared = [s for s in unmatched_declared if not s.disabled_in_config]
+
+    # The same move again, for a bigger population and a worse symptom. An
+    # `Exposes` entry is not necessarily a sensor: PID loops, stepwise fan curves,
+    # EEPROMs, firmware blobs, muxes and GPIO presence detectors are declared the
+    # same way and can never appear in a Redfish Sensors collection. Expecting them
+    # made 1,467 of 8,684 upstream declarations permanently absent, which is a red
+    # gate on a healthy board -- and on three boards in four.
+    #
+    # Three-valued, because a closed split would force a Type this build has never
+    # seen into whichever bucket the default happens to be. An unrecognised type is
+    # counted and REPORTED, never asserted about: claiming a regression for
+    # something we cannot classify is the exact false positive being removed here.
+    report.not_sensor_kinds = _classify_excluded(unmatched_declared)
+    unmatched_declared = [s for s in unmatched_declared
+                          if sensor_types.is_expected_live(s.type)]
 
     # Anything wrong with the declaration itself travels into the report. A
     # defect in the expectation source is a finding no reading-watcher can see.

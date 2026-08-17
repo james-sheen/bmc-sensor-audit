@@ -97,6 +97,20 @@ def as_text(report: DiffReport, *, target: str | None = None) -> str:
     lines.append(f"    not reading     {counts['present_not_reading']:>5}")
     lines.append(f"  declared, absent  {counts['declared_absent']:>5}")
     lines.append(f"  present, undeclared {counts['undeclared_present']:>3}")
+
+    # Declarations set aside before expectation. Printed even when zero would be
+    # wrong -- printed when NON-zero, because an exclusion the reader cannot see is
+    # indistinguishable from a checker that forgot to look. The unrecognised line
+    # is the one that matters: it is the tool admitting it does not know, and it is
+    # how the classification gets corrected.
+    if counts.get("not_a_sensor"):
+        lines.append(f"  not sensors       {counts['not_a_sensor']:>5}"
+                     "   (PID loops, EEPROMs, firmware, muxes -- cannot report a reading)")
+    if counts.get("unrecognised_type"):
+        lines.append(f"  type unrecognised {counts['unrecognised_type']:>5}"
+                     "   (not classified either way; NOT counted as absent)")
+        for sensor in report.not_sensor_kinds.get("unrecognised", [])[:10]:
+            lines.append(f"      {sensor.display_name}  [{sensor.type}]")
     lines.append("")
 
     if not report.walk_complete:

@@ -34,7 +34,7 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 161 in the dependency-free suite; the `[detect]` extra adds an engine canary |
+| Tests | 189 in the dependency-free suite; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | not started |
 | Fleet comparison (Stage 3) | not started |
 
@@ -94,6 +94,20 @@ Presence is three-valued, not two. Present and reading, present but disabled or
 unreadable, and entirely absent are three different hardware conditions with
 three different responses, and the middle one is the case this tool exists for —
 a disabled sensor does not appear in most BMC web UIs at all.
+
+**Not every `Exposes` entry is a sensor**, and treating them alike is how a tool
+reports a healthy board as broken. PID control loops, stepwise fan curves, EEPROMs,
+firmware images, I2C muxes and GPIO presence detectors are declared exactly like
+sensors and can never appear in a Redfish `Sensors` collection — **2,121 of 8,684
+upstream declarations, about 24 %**. They are classified out of the expectation and
+counted, never silently dropped.
+
+The classification is **three-valued for the same reason presence is**: a `Type` this
+build has never seen is reported as *unrecognised* rather than forced into whichever
+bucket the default happens to be. An unrecognised type never produces an absence
+finding — claiming a regression for something the tool cannot classify is the false
+positive this exists to remove — and it is printed by name so the classification can
+be corrected rather than quietly trusted.
 
 Beyond presence: thresholds that moved between the config and the machine,
 sensors the machine reports that nothing declares, and defects in the
