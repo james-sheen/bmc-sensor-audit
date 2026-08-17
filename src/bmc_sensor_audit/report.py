@@ -218,5 +218,12 @@ def detect_as_text(outcome, feed_result) -> str:
 
     if not (outcome.findings or outcome.core_case_declines or outcome.unmapped):
         lines.append("")
-        lines.append("  No liveness findings.")
+        if feed_result.fed:
+            lines.append("  No liveness findings.")
+        else:
+            # Not the same sentence, and the difference is the whole point of the
+            # section: nothing reached the engine, so this is an absence of evidence
+            # and not evidence of health. Reported from outside as reading like a
+            # verdict, which it did.
+            lines.append("  Liveness not evaluated -- nothing was fed to the engine.")
     return "\n".join(lines)

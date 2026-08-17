@@ -18,9 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import tempfile
-import json
 import sys
+import tempfile
 from pathlib import Path
 
 from .inventory.diff import compare
@@ -105,11 +104,40 @@ def _cmd_declare(args: argparse.Namespace) -> int:
     return EXIT_INCOMPLETE if declaration.unreadable else EXIT_CLEAN
 
 
+def _report_unreadable(declaration) -> int:
+    """An unreadable config is not a clean board; it is an unknown one.
+
+    Returns the exit code this fact floors the answer at, so a caller composes it with
+    whatever else it found instead of choosing between them.
+
+    `declare` has applied this rule at its own exit since the beginning. `coverage` and
+    `detect` did not: both printed `cannot read: ... every sensor this file declares is
+    unverifiable, not absent` and then exited 0, which is the single outcome that
+    sentence rules out. Reported from outside against `detect`; `coverage` carried the
+    same guard and the same hole. The case that matters is in neither report -- a real
+    configuration directory with one corrupt file in it, where everything else audits
+    normally and the gate goes green.
+
+    Printed from here rather than from each exit so it is reached whether or not the
+    optional engine extra is installed. At the exit it would be emitted only on the
+    path that already had a reason to fail.
+    """
+    if not declaration.unreadable:
+        return EXIT_CLEAN
+    print(f"\n{len(declaration.unreadable)} configuration file(s) could not be read. "
+          "The sensors they declare are unverifiable, not absent, so this run cannot "
+          "report a clean board:", file=sys.stderr)
+    for source, reason in declaration.unreadable:
+        print(f"    {source}: {reason}", file=sys.stderr)
+    return EXIT_INCOMPLETE
+
+
 def _cmd_coverage(args: argparse.Namespace) -> int:
     declaration = load_declaration(args.config)
     if not declaration.sensors and not declaration.unreadable:
         print("no sensors declared by any file under the given paths", file=sys.stderr)
         return EXIT_INCOMPLETE
+    unreadable_floor = _report_unreadable(declaration)
 
     if args.walk:
         walk = _load_recorded_walk(args.walk)
@@ -126,7 +154,10 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
 
     if not report.walk_complete:
         return EXIT_INCOMPLETE
-    return EXIT_REGRESSION if report.regressions else EXIT_CLEAN
+    # Composed the way `detect` composes its two stages: the worse wins, and 2 outranks
+    # 1 because could-not-read is a different claim from something-got-worse.
+    stage1 = EXIT_REGRESSION if report.regressions else EXIT_CLEAN
+    return max(stage1, unreadable_floor)
 
 
 def _cmd_detect(args: argparse.Namespace) -> int:
@@ -141,6 +172,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     if not declaration.sensors and not declaration.unreadable:
         print("no sensors declared by any file under the given paths", file=sys.stderr)
         return EXIT_INCOMPLETE
+    unreadable_floor = _report_unreadable(declaration)
 
     # `--walk` is repeatable and CHRONOLOGICAL, oldest first: stuck-at needs history,
     # and one walk is one sample. A live target gives exactly one.
@@ -193,10 +225,12 @@ def _cmd_detect(args: argparse.Namespace) -> int:
                        manifest, strict_declines=args.strict_declines)
     print(detect_as_text(outcome, feed_result))
 
-    # Composed, not merged. The worse of the two wins, and `2` outranks `1` because
-    # could-not-complete is a different claim from something-got-worse.
+    # Composed, not merged. The worse of the three wins, and `2` outranks `1` because
+    # could-not-complete is a different claim from something-got-worse. The config
+    # floor is one of the three: a run that could not read part of its own input has
+    # not verified the board, however clean the part it could read came out.
     stage1 = EXIT_REGRESSION if current.regressions else EXIT_CLEAN
-    return max(stage1, outcome.exit_code)
+    return max(stage1, outcome.exit_code, unreadable_floor)
 
 
 def build_parser() -> argparse.ArgumentParser:

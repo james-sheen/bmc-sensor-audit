@@ -34,7 +34,7 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 237 in the dependency-free suite; the `[detect]` extra adds an engine canary |
+| Tests | 252 in the dependency-free suite; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
@@ -93,6 +93,12 @@ asking someone to enumerate them invites them to miss one.
 run could not be completed. The third is distinct on purpose — a pipeline that
 reads "could not reach the BMC" as "sensors are missing" will fail a good
 firmware image, and it only has to do that once before nobody trusts the gate.
+
+"Could not be completed" includes a configuration file that could not be read,
+and it includes the case where the rest of the directory read fine. The sensors
+that file declared are unverifiable, not absent, so the run has not checked the
+board it was pointed at — one corrupt file in an otherwise good directory is the
+version of this that looks clean from every other angle.
 
 ## What it finds
 
