@@ -54,7 +54,7 @@ def test_every_documented_command_parses(line):
     """The argument parser accepts each documented invocation. Placeholders are
     substituted with values that exist, so a typo in a flag name fails here."""
     if line.startswith("bmc-sensor-audit"):
-        pytest.skip("console script form; requires an install, covered below")
+        pytest.skip("console script form; covered by TestTheConsoleScript")
     argv = line.split("bmc_sensor_audit.cli", 1)[1].split()
     argv = ["/dev/null" if PLACEHOLDER.fullmatch(a) else a for a in argv]
 
@@ -106,3 +106,74 @@ def test_the_bare_command_without_pythonpath_still_fails(tmp_path):
         env={"PATH": "/usr/bin:/bin"})
     assert result.returncode != 0
     assert "No module named" in result.stderr
+
+
+class TestTheConsoleScript:
+    """The README's second documented path, which nothing covered.
+
+    The skip above used to read *covered below* and nothing below covered it — a
+    false statement inside a test, which is the same family as the defect this
+    whole file exists for. This class makes the claim true.
+
+    **Its limit, stated rather than implied**: these assertions do not run `pip`.
+    They catch the realistic breakages — a renamed entry point, a script name that
+    drifted from the one the README prints, a target that no longer resolves — and
+    they do not catch packaging mechanics. The full path (fresh clone,
+    `pip install -e .`, run from a directory with no checkout) was exercised
+    manually against the published clone on 2026-08-17 and worked. If that
+    verification is ever needed as a gate rather than a spot check, it belongs in
+    CI where a clean runner is free, not here where every developer pays for it.
+    """
+
+    def test_the_readme_and_pyproject_agree_on_the_script_name(self):
+        """A rename in one file and not the other prints a command that does not
+        exist. Read out of both files rather than restated in a literal here."""
+        declared = re.search(r"^\s*([\w-]+)\s*=\s*\"bmc_sensor_audit\.cli:main\"",
+                             (ROOT / "pyproject.toml").read_text(), re.MULTILINE)
+        assert declared, "pyproject declares no console script pointing at cli:main"
+        printed = [line.split()[0] for line in _command_lines()
+                   if not line.startswith("PYTHONPATH")]
+        assert printed, "the README prints no console-script invocation"
+        assert set(printed) == {declared.group(1)}, (
+            f"README prints {set(printed)}, pyproject declares {declared.group(1)!r}")
+
+    def test_the_declared_entry_point_resolves_to_a_callable(self):
+        """`cli:main` must exist and be callable. An entry point naming a function
+        that was renamed installs cleanly and fails on first use."""
+        sys.path.insert(0, str(ROOT / "src"))
+        from bmc_sensor_audit import cli
+        assert callable(getattr(cli, "main", None)), \
+            "pyproject points at bmc_sensor_audit.cli:main, which is not callable"
+
+    def test_the_readme_says_the_console_script_needs_no_pythonpath(self):
+        """The reason the second path is documented at all. If this sentence goes,
+        the two blocks become an unexplained duplicate."""
+        assert "no `PYTHONPATH`" in README.read_text()
+
+
+class TestTheReadmeTestCount:
+    """The README states a test count, and a number written in two places drifts.
+
+    It was published saying **84** while the suite was 91, and reached 104 before
+    anyone read it — false on the public surface the whole time, because nothing
+    compared them. A count in prose has no owner; this gives it one.
+
+    The alternative was deleting the number. It is kept because it is the one line
+    telling a reader the project is tested at all, and a claim worth making is
+    worth pinning.
+    """
+
+    def test_the_readme_count_matches_what_pytest_collects(self):
+        collected = subprocess.run(
+            [sys.executable, "-m", "pytest", str(ROOT / "tests"),
+             "--collect-only", "-q", "-p", "no:cacheprovider"],
+            cwd=str(ROOT), capture_output=True, text=True)
+        found = re.search(r"(\d+) tests? collected", collected.stdout)
+        assert found, f"could not read a collection count:\n{collected.stdout[-400:]}"
+
+        claimed = re.search(r"\|\s*Tests\s*\|\s*(\d+)", README.read_text())
+        assert claimed, "the README Status table no longer states a test count"
+
+        assert int(claimed.group(1)) == int(found.group(1)), (
+            f"README claims {claimed.group(1)} tests, pytest collects {found.group(1)} "
+            "— update the README in the same change that added or removed tests")

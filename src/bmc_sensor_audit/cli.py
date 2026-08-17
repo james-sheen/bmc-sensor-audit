@@ -76,6 +76,29 @@ def _cmd_declare(args: argparse.Namespace) -> int:
         print(f"    {source}: {reason}")
     for anomaly in declaration.anomalies:
         print(f"  {anomaly}")
+
+    # A file that parses and declares nothing is a THIRD state, and the summary
+    # above cannot express it. Point this at a directory of JSON schemas and it
+    # prints `read 22 file(s)` with `0 unreadable` -- every number honest, the
+    # answer meaningless, and indistinguishable from a board that genuinely
+    # declares nothing. That is the exact shape this tool exists to catch on
+    # someone else's machine, and `coverage` already refuses it; `declare` was
+    # reporting it as clean and exiting 0.
+    #
+    # The two causes are split because they have different fixes: a path that
+    # matched no files is usually wrong, while a path that matched files
+    # declaring nothing is usually pointed at the wrong KIND of directory.
+    if not declaration.sensors:
+        if declaration.files_read == 0:
+            print("no files were read under the given paths -- check the path",
+                  file=sys.stderr)
+        else:
+            print(f"{declaration.files_read} file(s) read, none of which declares "
+                  "a sensor. Nothing here can be audited -- check the path names a "
+                  "configuration directory and not, say, a schema directory.",
+                  file=sys.stderr)
+        return EXIT_INCOMPLETE
+
     # An unreadable config is not a clean board; it is an unknown one.
     return EXIT_INCOMPLETE if declaration.unreadable else EXIT_CLEAN
 
