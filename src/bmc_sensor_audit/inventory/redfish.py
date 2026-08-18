@@ -330,6 +330,29 @@ def _walk_legacy(client: RedfishClient, path: str, walk: Walk, shape: str) -> No
                 walk.sensors.append(
                     read_sensor_object(obj, f"{path}#/{array}/{index}", shape))
 
+    if shape == "power":
+        # `PowerControl` is where the deprecated schema puts chassis draw, and
+        # `PowerConsumedWatts` appears nowhere else in it. This walker read only
+        # `Voltages` and `PowerSupplies` while the object parser already handled
+        # `PowerConsumedWatts`, so the parser carried a branch nothing could reach
+        # and chassis power was dropped without a word. Found against a 2021
+        # OpenBMC release image; no fixture could show it, because the mock only
+        # ever served what this reader was already looking for.
+        #
+        # **An entry with no measurement is skipped rather than reported.** A
+        # `PowerControl` object is a power *limit* control first and a sensor only
+        # incidentally; the 2.9.0 machines publish one carrying nothing but a null
+        # `LimitInWatts`. Emitting that as a sensor would invent a reading-less
+        # sensor from a control knob, and every downstream count -- present,
+        # absent, not-reading -- would inherit it.
+        for index, obj in enumerate(payload.get("PowerControl") or []):
+            if not isinstance(obj, dict):
+                continue
+            sensor = read_sensor_object(obj, f"{path}#/PowerControl/{index}", shape)
+            if sensor.reading is None:
+                continue
+            walk.sensors.append(sensor)
+
 
 def walk_from_dict(payload: dict[str, Any]) -> Walk:
     """Rehydrate a walk from `Walk.to_dict`, or from a raw Redfish dump.

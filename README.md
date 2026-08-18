@@ -34,19 +34,39 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 272 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 278 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
 reproducible by a reader** rather than only by us — twelve upstream configurations
 are vendored, and each documented finding has a test that runs against them.
-**Criterion 2 is now half met against real firmware.** The modern `Sensors` tree
-shape is proven against a capture from upstream `bmcweb` running under QEMU —
-`tests/fixtures/walk_qemu_bletchley.json`, 28 sensors, provenance recorded in the
-file. Nothing in that walk was written by this project. The **deprecated
-`Thermal`/`Power` shape is still proven only against synthetic fixtures**, because
-current `bmcweb` on a current platform does not serve it. A capture from
+**Both tree shapes are now exercised against real firmware, at different ages.**
+The modern `Sensors` shape is proven against a capture from upstream `bmcweb`
+under QEMU — `tests/fixtures/walk_qemu_bletchley.json`, 28 sensors, provenance in
+the file. The **deprecated `Thermal` shape** is proven against a second capture —
+`tests/fixtures/redfish_witherspoon_2_9_0.json`, the **OpenBMC 2.9.0 witherspoon
+release image (published 2021)** booted under the same emulator: 2 temperatures
+and 4 fans, real values with real legacy thresholds, parsed with no errors, while
+that firmware's modern `Sensors` collection is **empty**. Nothing in either walk
+was written by this project. That fixture holds the **verbatim Redfish documents**
+rather than our parsed output, and the tests replay them over the same real
+`http.server` and client the mock uses — so the walker itself is what is under
+test, not its own output.
+
+Two honest floors on that second one. **`Power` is still unproven**: the 2.9.0
+machines serve a `Power` document whose only populated array is `PowerControl`,
+which carries a power-limit object and no reading — so the deprecated *voltage*
+path has still never seen real data. And the reason current images cannot supply
+either is a **build option, not a removal**: `bmcweb` still carries the handlers,
+behind `redfish-allow-deprecated-power-thermal`, whose meson default is
+`disabled`. Measured 2026-08-18 by grepping all 19,340 tracked files of
+`openbmc/openbmc` at master — 32 vendor layers, no submodules — the flag appears
+exactly once, as its own definition, absent from bmcweb's default `PACKAGECONFIG`
+with **no machine appending it**. Its description says it will be removed June
+2026, a date already past. So the deprecated evidence here has a shelf life
+measured in upstream releases, and old published images are what supply it: the
+2.9.0 release carries six, of which four have QEMU machine models. A capture from
 **physical** hardware is still wanted — for sensor-population realism, real fault
 states, and vendor Redfish dialects other than `bmcweb` — and until there is one,
 criterion 2 is not honestly closed.

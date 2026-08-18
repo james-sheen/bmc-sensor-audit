@@ -1,0 +1,188 @@
+{
+ "format": "bmc-sensor-audit/redfish-documents/1",
+ "_provenance": "CAPTURED. Verbatim Redfish responses from OpenBMC release 2.9.0, release asset obmc-phosphor-image-witherspoon.ubi.mtd (published 2021), booted under QEMU 10.2.1 as machine witherspoon-bmc and captured 2026-08-18. These are the bytes that firmware served, not this project's parsed form, so a test replaying them exercises the walker itself rather than its own output. WHY THIS IMAGE: it is the counterpart to walk_qemu_bletchley.json. That one is current firmware serving only the modern Sensors tree; this one is 2021 firmware serving a populated deprecated Thermal tree while its modern Sensors collection is EMPTY. Current OpenBMC images cannot supply this: bmcweb still ships the handlers but gates them behind the meson feature redfish-allow-deprecated-power-thermal, whose default is disabled and which no machine in the tree enables. SETTLED, DELIBERATELY: the first capture attempt caught the machine with Fans as an empty array because the fan control had not populated it yet, and an empty array reads exactly like a chassis with no fans. The saved capture is asserted to carry 2 Temperatures and 4 Fans before it is written. WHAT THIS IS NOT: evidence about the deprecated POWER path. The Power document here has empty Voltages and PowerSupplies, and its single PowerControl entry is a power-limit object carrying no reading at all, so no real reading has ever exercised that half. It also proves nothing about physical hardware, sensor-population density, or any Redfish dialect other than bmcweb.",
+ "documents": {
+  "/redfish/v1/Chassis": {
+   "@odata.id": "/redfish/v1/Chassis",
+   "@odata.type": "#ChassisCollection.ChassisCollection",
+   "Members": [
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis"
+    }
+   ],
+   "Members@odata.count": 1,
+   "Name": "Chassis Collection"
+  },
+  "/redfish/v1/Chassis/chassis": {
+   "@odata.id": "/redfish/v1/Chassis/chassis",
+   "@odata.type": "#Chassis.v1_14_0.Chassis",
+   "Actions": {
+    "#Chassis.Reset": {
+     "@Redfish.ActionInfo": "/redfish/v1/Chassis/chassis/ResetActionInfo",
+     "target": "/redfish/v1/Chassis/chassis/Actions/Chassis.Reset"
+    }
+   },
+   "ChassisType": "RackMount",
+   "Id": "chassis",
+   "Links": {
+    "ComputerSystems": [
+     {
+      "@odata.id": "/redfish/v1/Systems/system"
+     }
+    ],
+    "ManagedBy": [
+     {
+      "@odata.id": "/redfish/v1/Managers/bmc"
+     }
+    ]
+   },
+   "Name": "chassis",
+   "PCIeDevices": {
+    "@odata.id": "/redfish/v1/Systems/system/PCIeDevices"
+   },
+   "Power": {
+    "@odata.id": "/redfish/v1/Chassis/chassis/Power"
+   },
+   "PowerState": "Off",
+   "Sensors": {
+    "@odata.id": "/redfish/v1/Chassis/chassis/Sensors"
+   },
+   "Status": {
+    "Health": "OK",
+    "HealthRollup": "OK",
+    "State": "StandbyOffline"
+   },
+   "Thermal": {
+    "@odata.id": "/redfish/v1/Chassis/chassis/Thermal"
+   }
+  },
+  "/redfish/v1/Chassis/chassis/Thermal": {
+   "@odata.id": "/redfish/v1/Chassis/chassis/Thermal",
+   "@odata.type": "#Thermal.v1_4_0.Thermal",
+   "Fans": [
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Thermal#/Fans/0",
+     "@odata.type": "#Thermal.v1_3_0.Fan",
+     "MaxReadingRange": 0,
+     "MemberId": "fan0_0",
+     "MinReadingRange": 0,
+     "Name": "fan0 0",
+     "Reading": 31500,
+     "ReadingUnits": "RPM",
+     "Status": {
+      "Health": "OK",
+      "State": "Enabled"
+     }
+    },
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Thermal#/Fans/1",
+     "@odata.type": "#Thermal.v1_3_0.Fan",
+     "MaxReadingRange": 0,
+     "MemberId": "fan1_0",
+     "MinReadingRange": 0,
+     "Name": "fan1 0",
+     "Reading": 31500,
+     "ReadingUnits": "RPM",
+     "Status": {
+      "Health": "OK",
+      "State": "Enabled"
+     }
+    },
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Thermal#/Fans/2",
+     "@odata.type": "#Thermal.v1_3_0.Fan",
+     "MaxReadingRange": 0,
+     "MemberId": "fan2_0",
+     "MinReadingRange": 0,
+     "Name": "fan2 0",
+     "Reading": 31500,
+     "ReadingUnits": "RPM",
+     "Status": {
+      "Health": "OK",
+      "State": "Enabled"
+     }
+    },
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Thermal#/Fans/3",
+     "@odata.type": "#Thermal.v1_3_0.Fan",
+     "MaxReadingRange": 0,
+     "MemberId": "fan3_0",
+     "MinReadingRange": 0,
+     "Name": "fan3 0",
+     "Reading": 31500,
+     "ReadingUnits": "RPM",
+     "Status": {
+      "Health": "OK",
+      "State": "Enabled"
+     }
+    }
+   ],
+   "Id": "Thermal",
+   "Name": "Thermal",
+   "Redundancy": [],
+   "Temperatures": [
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Thermal#/Temperatures/0",
+     "@odata.type": "#Thermal.v1_3_0.Temperature",
+     "LowerThresholdCritical": 0.0,
+     "LowerThresholdNonCritical": 0.0,
+     "MaxReadingRangeTemp": 0.0,
+     "MemberId": "ambient",
+     "MinReadingRangeTemp": 0.0,
+     "Name": "ambient",
+     "ReadingCelsius": 22.738,
+     "Status": {
+      "Health": "OK",
+      "State": "Enabled"
+     },
+     "UpperThresholdCritical": 35.0,
+     "UpperThresholdNonCritical": 25.0
+    },
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Thermal#/Temperatures/1",
+     "@odata.type": "#Thermal.v1_3_0.Temperature",
+     "LowerThresholdCritical": 0.0,
+     "LowerThresholdNonCritical": 0.0,
+     "MaxReadingRangeTemp": 0.0,
+     "MemberId": "pcie",
+     "MinReadingRangeTemp": 0.0,
+     "Name": "pcie",
+     "ReadingCelsius": 0.0,
+     "Status": {
+      "Health": "Critical",
+      "State": "Enabled"
+     },
+     "UpperThresholdCritical": 70.0,
+     "UpperThresholdNonCritical": 60.0
+    }
+   ]
+  },
+  "/redfish/v1/Chassis/chassis/Power": {
+   "@odata.id": "/redfish/v1/Chassis/chassis/Power",
+   "@odata.type": "#Power.v1_5_2.Power",
+   "Id": "Power",
+   "Name": "Power",
+   "PowerControl": [
+    {
+     "@odata.id": "/redfish/v1/Chassis/chassis/Power#/PowerControl/0",
+     "@odata.type": "#Power.v1_0_0.PowerControl",
+     "MemberId": "0",
+     "Name": "Chassis Power Control",
+     "PowerLimit": {
+      "LimitException": "NoAction",
+      "LimitInWatts": null
+     }
+    }
+   ],
+   "Redundancy": []
+  },
+  "/redfish/v1/Chassis/chassis/Sensors": {
+   "@odata.id": "/redfish/v1/Chassis/chassis/Sensors",
+   "@odata.type": "#SensorCollection.SensorCollection",
+   "Description": "Collection of Sensors for this Chassis",
+   "Members": [],
+   "Members@odata.count": 0,
+   "Name": "Sensors"
+  }
+ }
+}

@@ -300,9 +300,16 @@ def test_the_captured_walk_is_not_the_mock_wearing_a_new_name():
 def test_every_vendored_walk_declares_its_provenance():
     """Derived from the directory, never from a list written here. A fixture
     added without provenance is exactly the drift this checks for, and a
-    transcribed filename list would not see it."""
-    walks = sorted(FIXTURES.glob("walk_*.json"))
-    assert len(walks) >= 3, "the walk fixture set shrank"
+    transcribed filename list would not see it.
+
+    It globbed `walk_*.json` until 2026-08-18, which is a transcription wearing a
+    glob's clothes: the naming convention was the list. Two fixtures added that day
+    -- a walk series and a set of recorded Redfish documents -- were named for what
+    they are rather than for the pattern, carried provenance, and were checked by
+    nothing. Now every fixture in the directory answers, whatever it is called.
+    """
+    walks = sorted(FIXTURES.glob("*.json"))
+    assert len(walks) >= 5, "the fixture set shrank"
     kinds = {}
     for path in walks:
         payload = json.loads(path.read_text())
@@ -315,3 +322,106 @@ def test_every_vendored_walk_declares_its_provenance():
         "no captured walk remains; criterion 2 is back to fixtures this project wrote"
     assert "SYNTHETIC" in kinds.values(), \
         "the synthetic pair covers the deprecated tree shape and must not be dropped"
+
+
+class TestTheDeprecatedShapeAgainstRealFirmware:
+    """The other half of criterion 2, and the only real evidence for it.
+
+    Every other test of the deprecated `Thermal`/`Power` tree in this repository
+    feeds the walker a document this project wrote, so it can only show that the
+    reader reads what we thought firmware sends. `redfish_witherspoon_2_9_0.json`
+    holds the bytes an actual `bmcweb` sent: OpenBMC release 2.9.0, published 2021,
+    booted under QEMU. That firmware predates `ThermalSubsystem` entirely, so it
+    serves a populated `Thermal` tree while its modern `Sensors` collection is
+    empty -- the exact mirror of `walk_qemu_bletchley.json`, which is current
+    firmware serving only the modern shape.
+
+    The documents are replayed over the same real `http.server` the mock uses and
+    read through the real `RedfishClient`, because a stubbed client would skip the
+    transport this file exists to keep in the loop. What changes is only the source
+    of the bytes: recorded rather than generated.
+    """
+
+    DOCUMENTS = FIXTURES / "redfish_witherspoon_2_9_0.json"
+
+    @classmethod
+    def _fixture(cls):
+        return json.loads(cls.DOCUMENTS.read_text())
+
+    @staticmethod
+    def _walk(documents):
+        class _Recorded:
+            fail: dict = {}
+
+            def routes(self):
+                return dict(documents)
+
+        with serve(_Recorded()) as url:
+            return walk_chassis(RedfishClient(url))
+
+    def test_the_recorded_documents_replay_into_real_sensors(self):
+        walk = self._walk(self._fixture()["documents"])
+        assert not walk.errors
+        assert sorted(walk.shapes_seen) == ["power", "sensors", "thermal"]
+        by_shape = [s.source_shape for s in walk.sensors]
+        assert len(walk.sensors) == 6, [s.name for s in walk.sensors]
+        assert set(by_shape) == {"thermal"}
+
+    def test_the_legacy_threshold_fields_are_read_from_real_bytes(self):
+        """`LowerThresholdCritical` and friends, as 2021 firmware spells them. The
+        modern capture cannot exercise this: it carries the nested `Thresholds`
+        object instead."""
+        walk = self._walk(self._fixture()["documents"])
+        ambient = next(s for s in walk.sensors if s.name == "ambient")
+        assert ambient.reading == 22.738
+        assert ambient.thresholds[("upper", "critical")] == 35.0
+        assert ambient.thresholds[("upper", "warning")] == 25.0
+
+    def test_this_firmware_serves_nothing_on_the_modern_collection(self):
+        """The property that makes it worth vendoring. If the modern collection
+        ever answers here, the fixture has stopped being the deprecated-shape
+        counterpart and the coverage it is cited for is gone."""
+        docs = self._fixture()["documents"]
+        assert docs["/redfish/v1/Chassis/chassis/Sensors"]["Members@odata.count"] == 0
+
+    def test_a_power_control_carrying_no_reading_is_not_counted_as_a_sensor(self):
+        """Exercised against the real control object, not an invented one.
+
+        This firmware's `Power` document has empty `Voltages` and `PowerSupplies`
+        and a single `PowerControl` entry that is a power-limit knob with no
+        measurement in it. Emitting that as a reading-less sensor would invent one
+        from a control, and every downstream count would inherit it.
+        """
+        docs = self._fixture()["documents"]
+        control = docs["/redfish/v1/Chassis/chassis/Power"]["PowerControl"]
+        assert len(control) == 1 and "PowerConsumedWatts" not in control[0]
+
+        walk = self._walk(docs)
+        assert not [s for s in walk.sensors if s.source_shape == "power"]
+
+    def test_a_power_control_carrying_a_reading_is_counted(self):
+        """SYNTHETIC, and labelled because it has to be.
+
+        `PowerConsumedWatts` is where the deprecated schema puts chassis draw, and
+        the walker skipped `PowerControl` entirely until 2026-08-18 while the object
+        parser already knew the key -- a branch nothing could reach. Real firmware
+        found the gap by publishing the array, but neither 2.9.0 machine available
+        publishes a value in it, so the repaired path can only be shown with a value
+        added here. That is weaker evidence than the rest of this class and is worth
+        replacing the moment a capture carries one.
+        """
+        docs = json.loads(json.dumps(self._fixture()["documents"]))
+        docs["/redfish/v1/Chassis/chassis/Power"]["PowerControl"][0].update(
+            {"Name": "Chassis Power", "PowerConsumedWatts": 137.5})
+
+        walk = self._walk(docs)
+        drawn = [s for s in walk.sensors if s.source_shape == "power"]
+        assert [(s.name, s.reading) for s in drawn] == [("Chassis Power", 137.5)]
+
+    def test_the_fixture_records_what_it_does_not_prove(self):
+        provenance = self._fixture()["_provenance"]
+        assert "CAPTURED" in provenance
+        for fact in ("2.9.0", "witherspoon-bmc", "10.2.1",
+                     "redfish-allow-deprecated-power-thermal"):
+            assert fact in provenance, f"the provenance no longer records {fact!r}"
+        assert "what this is not" in provenance.lower()
