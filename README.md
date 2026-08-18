@@ -226,10 +226,18 @@ unfamiliar reason is a certainty over time rather than a hypothetical, and filin
 under the nearest familiar one would reclassify the case and report it confidently.
 `--strict-declines` escalates the first and third rows to `1`.
 
-**Stuck-at detection is proven against synthetic series only.** The sample floor was
-measured, the pathway works end to end, and no real BMC has been watched going quiet.
-Until a capture from real hardware exists, that half is honestly open — as is Stage 1's
-criterion 2, for the same reason and with the same fix.
+**Stuck-at detection is exercised against real firmware readings, under ground
+truth somebody controlled** — `tests/fixtures/stuck_at_qemu_bletchley.json`, 28
+consecutive walks in which one sensor was driven to a new value before each of the
+first twelve and then left alone. It is silent while driven and flagged once
+frozen, and over the driven phase the sensors the engine flags are exactly the
+sensors that did not move, derivable from the recording without asking the engine.
+
+**What is still open is narrower than it was.** Freezing a register through an
+emulator monitor is an induced fault, not a sensor failing on its own, so **no
+real BMC has yet been watched going quiet by itself**, and QEMU wires a subset of
+any board's devices by construction. Both need physical hardware. They no longer
+need it in order to show the pathway works.
 
 ## Two defects found in the upstream corpus
 
