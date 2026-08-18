@@ -77,9 +77,18 @@ jobs:
         # skip -- a leak check that no longer runs anywhere it matters. Installing
         # PyYAML does not put bmc_sensor_audit on the path, so the negative above is
         # untouched.
+        #
+        # pytest is installed for the same reason, and its absence was worse than a
+        # missing dependency: `setup-python` provides a clean interpreter that does
+        # not carry pytest, so `python3 -m pytest` exited with `No module named
+        # pytest` on every push since this workflow was written. The step failed
+        # instantly, no test ever ran on the server, and the two steps below it --
+        # the ones that run what the README prints -- never executed at all. A
+        # workflow can be red for its whole life without ever having run the thing
+        # it exists to run.
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml pytest
           python3 -m pytest tests/ -q
 
       - name: The documented console-script path, from a clean checkout

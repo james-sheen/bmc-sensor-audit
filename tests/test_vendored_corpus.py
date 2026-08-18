@@ -287,8 +287,9 @@ class TestTheEndToEndDiffReproducesFromAClone:
     cannot drift underneath the test. If they move, the reader moved.
     """
 
+    @classmethod
     @pytest.fixture(scope="class")
-    def report(self):
+    def report(cls):
         from bmc_sensor_audit.inventory.diff import compare
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
         declaration = load_declaration([str(UPSTREAM / "meta" / "bletchley")])

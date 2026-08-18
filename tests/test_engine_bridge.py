@@ -367,3 +367,140 @@ class TestTheWholeStage2PathEndToEnd:
         assert not result.warming_up, "history did not accumulate past the floor"
         assert outcome.exit_code == 1, "a frozen sensor passed the gate"
         assert outcome.findings, "no finding for a series that never moved"
+
+
+class TestTheVendoredCaptureRunsTheWholeStage2Path:
+    """The same chain, on the one walk in this repository that this repository did
+    not write.
+
+    Everything above is synthetic. The four pillars build their own entities, and the
+    end-to-end class builds walks from a dict literal -- self-consistent by
+    construction, which is precisely the property that let a channel-reading defect
+    survive 269 tests until real firmware found it. `walk_qemu_bletchley.json` is 28
+    sensors from upstream `bmcweb` under QEMU, and until now it was read only by the
+    shape layer, so the Stage 2 pipeline was still proven entirely against shapes we
+    invented. Wiring it in here puts it under the daily canary.
+
+    Both inputs are frozen files in this repository, so the counts are pinned
+    deliberately: if one moves, the reader moved.
+    """
+
+    @classmethod
+    @pytest.fixture(scope="class")
+    def stage2(cls):
+        import json
+        import sys
+        import tempfile
+        from pathlib import Path
+        root = pathlib.Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(root / "src"))
+        from bmc_sensor_audit.detect.feeder import evaluate, feed
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.diff import compare
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        from bmc_sensor_audit.inventory.redfish import walk_from_dict
+
+        # The bletchley pair, not the whole corpus: this is the configuration that
+        # machine actually booted. The coverage half of the same pairing is pinned in
+        # test_vendored_corpus.py; this is the liveness half.
+        declaration = load_declaration(
+            [str(root / "tests" / "fixtures" / "upstream" / "meta" / "bletchley")])
+        walk = walk_from_dict(json.loads(
+            (root / "tests" / "fixtures" / "walk_qemu_bletchley.json").read_text()))
+
+        model, manifest = generate(declaration)
+        path = pathlib.Path(tempfile.mkdtemp()) / "model.yaml"
+        path.write_text(yaml.safe_dump(model))
+        session = EngineSession()
+        session.load_model(str(path))
+
+        report = compare(declaration, walk)
+        result = feed(session, manifest, [report])
+        outcome = evaluate(check(session).to_dict(),
+                           model_describe(session).to_dict(), manifest)
+        return report, result, outcome
+
+    @staticmethod
+    def _flagged(outcome) -> set[str]:
+        """The declared names Stage 2 produced a finding for.
+
+        Both translation branches put the sensor name first -- `NAME is above ...` and
+        `NAME: ...` -- so the leading token is the name in either case.
+        """
+        return {finding.split()[0].rstrip(":") for finding in outcome.findings}
+
+    def test_every_reading_the_capture_carries_reaches_the_model(self, stage2):
+        """`skipped_not_modelled` is the number to watch. It counts declarations the
+        generator chose not to model, and a channel the reader silently drops lands
+        there -- which is the defect this capture found in the first place."""
+        _, result, _ = stage2
+        assert (result.fed, result.skipped_not_reading, result.skipped_not_modelled) \
+            == (28, 0, 0)
+
+    def test_the_engine_consumed_everything_it_was_given(self, stage2):
+        """Two questions the engine will only answer if asked. A core-case decline is
+        the engine saying a value Stage 1 called present never arrived; `unmapped` is
+        it reporting observations the model never read. Both are mapping bugs, and
+        both are silent."""
+        _, _, outcome = stage2
+        assert outcome.core_case_declines == []
+        assert outcome.unmapped == []
+        assert outcome.unclassified_declines == []
+
+    def test_the_denominator_is_the_one_the_capture_supports(self, stage2):
+        _, _, outcome = stage2
+        assert outcome.checked == {"invariants": 80, "entities": 28}
+
+    def test_one_walk_is_one_sample_and_liveness_says_so(self, stage2):
+        """The exit code comes from bound breaches, not from liveness: every sensor is
+        below the stuck-at floor on a single walk, and that is reported rather than
+        suppressed."""
+        _, result, outcome = stage2
+        assert len(result.warming_up) == 28
+        assert len(outcome.data_declines) == 28
+        assert outcome.exit_code == 1
+
+    def test_no_finding_contradicts_the_firmware_own_health_field(self, stage2):
+        """Cross-validation against a producer that has never heard of this project.
+
+        The capture carries `Status.Health` exactly as `bmcweb` computed it. Stage 2
+        reaches its verdict independently, from entity-manager thresholds. A sensor
+        this pipeline flags while the firmware calls it healthy would be a false
+        positive against an independent oracle, which is the strongest negative
+        evidence available without hardware.
+        """
+        report, _, outcome = stage2
+        health = {m.declared.display_name: m.live.health for m in report.matches}
+        flagged = self._flagged(outcome)
+        contradicted = sorted(n for n in flagged if health.get(n) == "OK")
+        assert contradicted == [], contradicted
+
+    def test_where_the_firmware_disagrees_with_its_own_published_thresholds(self, stage2):
+        """The other direction, which is not the mirror image.
+
+        Two sensors are marked `Critical` by `bmcweb` while sitting inside the bounds
+        `bmcweb` published for them in the same response. Stage 2 is silent on both,
+        and silence is the right answer to those numbers -- so this is pinned as a
+        known divergence in the firmware rather than as a miss in the reader.
+
+        It is pinned by NAME and re-derived from the capture's own thresholds, so if
+        the pipeline ever starts flagging these two, whoever sees the new finding
+        reads this first. The cause would be a change in this reader; the capture
+        cannot change.
+        """
+        report, _, outcome = stage2
+        flagged = self._flagged(outcome)
+        silent = sorted(m.declared.display_name for m in report.matches
+                        if m.live.health not in (None, "OK")
+                        and m.declared.display_name not in flagged)
+        assert silent == ["P12V_FAN0", "P12V_FAN2"], silent
+
+        for match in report.matches:
+            if match.declared.display_name not in silent:
+                continue
+            lower = match.live.thresholds[("lower", "critical")]
+            upper = match.live.thresholds[("upper", "warning")]
+            assert lower < match.live.reading < upper, (
+                f"{match.declared.display_name} reads {match.live.reading}, no longer "
+                f"inside the {lower}..{upper} the capture publishes for it -- this pin "
+                "describes a different situation than the one measured")

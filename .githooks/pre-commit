@@ -1,5 +1,6 @@
 #!/bin/sh
-# Refuse a commit carrying something that should not be published.
+# Refuse a commit carrying something that should not be published, and one whose
+# README no longer describes the suite.
 #
 # Activate once per clone:   git config core.hooksPath .githooks
 #
@@ -10,4 +11,31 @@
 #
 # To commit past it knowingly:   git commit --no-verify
 # That is a real escape hatch and it should be rare enough to notice.
-exec python3 "$(git rev-parse --show-toplevel)/tools/hygiene_check.py"
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+
+python3 "$ROOT/tools/hygiene_check.py"
+
+# The README's test count, checked where the drift is created rather than where it
+# is discovered. Dependency-free and about 0.2s.
+#
+# The count it checks is taken from what git TRACKS, not from what the directory
+# holds, and that is the whole reason it can run here at all. The published 289 was
+# measured on a working tree carrying a test file that was never committed: true of
+# that disk, false of this repository. A disk-derived count would make this hook
+# red on any tree with an untracked test in it -- red every run, for a reason that
+# is not a defect, which is how a check teaches people to pass --no-verify. That
+# flag also switches off the hygiene sweep above, so a check nobody can satisfy
+# costs more than the one it was added to provide.
+#
+# A missing pytest fails rather than skips. A gate that converts its own red into a
+# skip removes the failure and the evidence together.
+if ! python3 -c "import pytest" 2>/dev/null; then
+    echo "pre-commit: pytest is not installed, so the README count check cannot run." >&2
+    echo "            python3 -m pip install pytest    (or commit with --no-verify)" >&2
+    exit 1
+fi
+
+exec python3 -m pytest \
+    "$ROOT/tests/test_readme_commands.py::TestTheReadmeTestCount" \
+    -q -p no:cacheprovider

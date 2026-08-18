@@ -190,18 +190,59 @@ class TestTheReadmeTestCount:
     worth pinning.
     """
 
+    @staticmethod
+    def _tracked_tests() -> list[str]:
+        """The test files this repository has, asked of git rather than the disk.
+
+        Falls back to the directory when git cannot answer -- because an empty list
+        would collect nothing and report a confident zero, and a zero is the most
+        dangerous wrong count there is.
+
+        Git can fail to answer in two different ways and only one of them is a
+        return code. A checkout with no `.git` exits non-zero; an image with no git
+        BINARY raises instead, and `python:3.11-slim` is exactly that image. Catching
+        only the first would have turned this test into an error on any environment
+        that runs the suite without git installed.
+        """
+        try:
+            listed = subprocess.run(["git", "ls-files", "--", "tests/test_*.py"],
+                                    cwd=str(ROOT), capture_output=True, text=True)
+        except OSError:
+            return [str(ROOT / "tests")]
+        paths = [line for line in listed.stdout.split() if line]
+        if listed.returncode != 0 or not paths:
+            return [str(ROOT / "tests")]
+        # The engine-bridge exclusion is applied HERE and not left to `--ignore`.
+        # `--ignore` filters directory collection; it does not suppress a file named
+        # explicitly on the command line, so once this returns paths instead of a
+        # directory the flag stops covering it. Measured: the count read 292 with the
+        # engine installed and 272 without -- the exact installed-dependent population
+        # this test exists to avoid, reintroduced by the mechanism meant to fix it.
+        return [str(ROOT / path) for path in paths
+                if not path.endswith("test_engine_bridge.py")]
+
     def test_the_readme_count_matches_what_pytest_collects(self):
         """Measured on the DEPENDENCY-FREE suite, which is a population that does not
         depend on what happens to be installed.
 
-        The optional `[detect]` extra adds eight canary tests, so without this the
-        figure differs by whether the engine is present — 161 against 169 — and the
-        check goes red for a legitimate reason on any machine that has the extra. A
-        row like that teaches people to skip the whole check, which costs more than
-        the check is worth.
+        The optional `[detect]` extra adds the engine-bridge tests, so without the
+        ignore below the figure would differ by whether the engine is present, and
+        the check would go red for a legitimate reason on any machine that has the
+        extra. A row like that teaches people to skip the whole check, which costs
+        more than the check is worth.
+
+        This docstring used to name two specific figures, and both had gone stale --
+        the defect this test exists to catch, one layer in. A count belongs where
+        something derives it, never in prose beside it.
+
+        **The population is what git TRACKS, not what the directory holds.** The
+        README describes the repository, and the two are not the same thing: the
+        published 289 was measured on a working tree carrying a test file that was
+        never committed, so it was true of that disk and false of this project. A
+        count taken from the disk is true only on the machine that took it.
         """
         collected = subprocess.run(
-            [sys.executable, "-m", "pytest", str(ROOT / "tests"),
+            [sys.executable, "-m", "pytest", *self._tracked_tests(),
              "--collect-only", "-q", "-p", "no:cacheprovider",
              "--ignore", str(ROOT / "tests" / "test_engine_bridge.py")],
             cwd=str(ROOT), capture_output=True, text=True)
