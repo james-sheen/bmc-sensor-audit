@@ -46,7 +46,9 @@ revision nobody can identify.**
 | `meta/twinlake.json` | The `$ipmbindex` runtime template — the rarest, and the only hygiene-clean file at the pin that carries it. |
 | `nvidia/cx7_mezzanine_module.json` | **Compound templates** — `$bus_`-prefixed names. These broke the first template matcher, because `_` is a word character so a greedy variable pattern swallowed the whole token and degenerated to a match-anything expression. |
 | `asrock/spc621d8hm3.json` | `Status: disabled` entries — declared, deliberately off, and the case the tool exists for. |
-| `delta/awf2dc3200w_psu.json` | An entry carrying a **`Labels` array that this parser does not read** — see the lead below. Kept because the lead deserves a runnable example. |
+| `delta/awf2dc3200w_psu.json` | An entry carrying a **`Labels` array that this parser does not expand on** — see the lead below. Kept because the lead deserves a runnable example. |
+| `nvidia/cx7_mezzanine_module.json` | Also **`Labels` and `Name1` on one entry** — the ambiguous overlap, reported rather than guessed. |
+| `meta/fbyv2.json` | Also **multi-channel parts**: three TMP421 entries whose remote input is named `Name1`, which this reader discarded until a capture against real firmware reported them. |
 | `meta/fbyv2.json` | **Upstream defect 1**: a `temp1` threshold named `upper critical` with `Direction: less than`. Also **one `Exposes` entry declaring several sensors** — its single `HSC` entry expands to eight, one per rail. |
 | `meta/fbyv35.json` | **Upstream defect 2**, same shape, and the widest threshold-name vocabulary in the corpus. |
 
@@ -67,11 +69,18 @@ gap.
 
 ## One open lead, with a fixture for it
 
-**This parser does not read an `Exposes` entry's `Labels` array.** Multi-sensor
+**This parser does not EXPAND on an `Exposes` entry's `Labels` array.** Multi-sensor
 expansion comes only from per-threshold `Label` fields — the opposite of the
 obvious reading, and choosing a fixture on the obvious reading picked a file that
 demonstrated nothing. Five entries across four of these nine files carry a
-`Labels` array that is never consulted.
+`Labels` array that is never expanded on.
+
+**Narrowed 2026-08-18.** The array is now read for one purpose and one only: an
+entry that carries both a `Labels` list and several `Name<n>` channels is
+ambiguous, because the list can select which channels exist at all, and the
+answer belongs to the device class rather than to this file. That case is
+reported as an anomaly instead of being resolved by guesswork —
+`nvidia/cx7_mezzanine_module.json` carries two of them. Expansion is unchanged.
 
 **A sensor declared through `Labels` alone, with no per-rail thresholds, would be
 invisible to this tool.** Whether any real board does that is unmeasured. It is

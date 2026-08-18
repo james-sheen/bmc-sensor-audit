@@ -168,3 +168,92 @@ def test_bound_comes_from_direction_not_from_the_name():
     declaration = parse_config_text(json.dumps(cfg))
     bounds = {t.name: t.bound for t in declaration.sensors[0].thresholds}
     assert bounds == {"HardShutdown": "upper", "Warning": "lower"}
+
+
+# ---------------------------------------------------------------------------
+# Multi-channel parts. Found by capturing a real board, which reported two
+# sensors this reader had discarded: a TMP421 has a local and a remote input,
+# and the configuration names the second one `Name1`. No fixture could have
+# shown it, because the fixtures are generated from this reader.
+
+
+def test_a_multi_channel_entry_declares_every_channel():
+    cfg = {"Exposes": [{"Name": "MB_U73_THERM_LOCAL", "Name1": "MB_U73_THERM_REMOTE",
+                        "Type": "TMP421", "Bus": 12, "Address": "0x4C"}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == [
+        "MB_U73_THERM_LOCAL", "MB_U73_THERM_REMOTE"]
+
+
+def test_the_channel_suffix_has_no_ceiling():
+    """The corpus runs to `Name17`. A reader written from the common cases would
+    handle `Name1` through `Name6` and drop the rest in silence, which is the
+    same failure as the one this test exists for."""
+    cfg = {"Exposes": [dict({"Name": "ch1", "Type": "NCT7802"},
+                            **{f"Name{n}": f"ch{n + 1}" for n in range(1, 18)})]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == [f"ch{n}" for n in range(1, 19)]
+
+
+def test_a_threshold_index_binds_it_to_one_channel():
+    """`Index` is how upstream ties a threshold to a channel -- 153 thresholds
+    across 42 entries in the corpus, 39 of which also name several channels."""
+    cfg = {"Exposes": [{"Name": "local", "Name1": "remote", "Type": "TMP421",
+                        "Thresholds": [
+                            {"Direction": "greater than", "Name": "upper critical",
+                             "Value": 105, "Index": 2}]}]}
+    by_name = {s.name: s for s in parse_config_text(json.dumps(cfg)).sensors}
+    assert [t.value for t in by_name["remote"].thresholds] == [105]
+    assert by_name["local"].thresholds == ()
+
+
+def test_a_threshold_without_an_index_guards_every_channel():
+    cfg = {"Exposes": [{"Name": "local", "Name1": "remote", "Type": "TMP421",
+                        "Thresholds": [
+                            {"Direction": "greater than", "Name": "upper critical",
+                             "Value": 105}]}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert all(len(s.thresholds) == 1 for s in declaration.sensors)
+
+
+def test_a_single_channel_entry_keeps_every_threshold():
+    """Index filtering must not reach entries that name one channel: three
+    corpus entries carry an indexed threshold without a second `Name`, and
+    filtering them would drop a threshold that has always been read."""
+    cfg = {"Exposes": [{"Name": "only", "Type": "TMP421", "Thresholds": [
+        {"Direction": "greater than", "Name": "upper critical", "Value": 105,
+         "Index": 2}]}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert len(declaration.sensors[0].thresholds) == 1
+
+
+def test_channels_and_rails_together_are_reported_not_guessed():
+    """`Labels` and `Name1` are different axes and can appear on one entry -- 63
+    do in the corpus. A `Labels` list can select which channels exist at all, so
+    which sensors the entry declares depends on the device class, not on this
+    file. The tool says so rather than picking an answer."""
+    cfg = {"Exposes": [{"Name": "NIC Temp", "Name1": "NIC Temp Remote",
+                        "Type": "TMP421", "Labels": ["temp2"]}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == ["NIC Temp"]
+    assert [a.kind for a in declaration.anomalies] == ["ambiguous_channel_naming"]
+    assert "NIC Temp Remote" in declaration.anomalies[0].detail
+
+
+def test_a_rail_expansion_is_still_driven_only_by_threshold_labels():
+    """The narrower half of the same rule: reading `Labels` to detect the overlap
+    above must not turn it into an expansion key. An entry carrying `Labels` and
+    nothing per-rail still declares one sensor, not one per rail."""
+    cfg = {"Exposes": [{"Name": "PSU", "Type": "pmbus",
+                        "Labels": ["vin", "iout1", "pin"]}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == ["PSU"]
+    assert declaration.sensors[0].label is None
+    assert declaration.anomalies == []
+
+
+def test_two_channels_sharing_a_name_are_reported():
+    cfg = {"Exposes": [{"Name": "same", "Name1": "same", "Type": "TMP421"}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == ["same"]
+    assert [a.kind for a in declaration.anomalies] == ["duplicate_channel_name"]

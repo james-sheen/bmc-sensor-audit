@@ -6,7 +6,7 @@ component that was never fitted -- so the declaration is the only place the
 expected set exists.
 
 Everything in this module was shaped by measuring the upstream corpus (247
-configuration files) rather than by reading the format documentation. Four
+configuration files) rather than by reading the format documentation. Five
 things the documented example does not prepare you for, each of which silently
 corrupts a naive parser:
 
@@ -22,7 +22,16 @@ corrupts a naive parser:
     `temp1` -- and 748 entries in the corpus use them, one with 33. Counting
     `Exposes` entries counts boards, not sensors.
 
-4.  **Roughly one name in eight is a template.** `$bus`, `$ADDRESS`, `$index`
+4.  **A multi-channel part names its other channels `Name1`, `Name2`, ...**
+    A TMP421 has a local and a remote input; the configuration writes `Name`
+    and `Name1`, and a reader that takes only `Name` discards the rest. 115
+    entries carry at least one, the suffixes run to `Name17`, and this is a
+    different axis from `Label`: a threshold's `Index` binds it to a channel,
+    while `Label` binds it to a rail. Found only by capturing a real board,
+    which reported a sensor this reader had dropped -- no fixture could show
+    it, because the fixtures are generated from this reader.
+
+5.  **Roughly one name in eight is a template.** `$bus`, `$ADDRESS`, `$index`
     are substituted at runtime, so the declared string never appears on the
     machine. Compared literally, ~470 sensors read as missing on every healthy
     board. They are marked here and handled by the diff, not silently dropped.
@@ -88,6 +97,16 @@ ANY_TEMPLATE = re.compile(r"\$\w+")
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 
+# A multi-channel part names its extra channels alongside `Name`: a TMP421 carries
+# a local and a remote channel, and the configuration writes `Name` and `Name1`.
+# The suffix is the hwmon channel index minus one -- `Name` is channel 1, `Name1`
+# is channel 2 -- which is what a threshold's `Index` refers to.
+#
+# Derived from the corpus, not from the documentation, which does not mention the
+# convention at all: 115 entries carry at least one, the suffixes run to `Name17`,
+# and reading only `Name` discards every channel after the first.
+_CHANNEL_KEY = re.compile(r"^Name(\d+)$")
+
 
 @dataclass(frozen=True)
 class Threshold:
@@ -100,6 +119,7 @@ class Threshold:
     label: str | None          # pmbus rail, when the entry declares several
     bound: str | None          # "upper" / "lower", from `direction`
     level: str | None          # "critical" / "warning" / ..., from `name`
+    index: int | None = None   # hwmon channel this guards, when the entry has several
 
     @property
     def is_upper(self) -> bool:
@@ -262,38 +282,110 @@ def _read_thresholds(
         label = raw.get("Label")
         label = str(label) if label is not None else None
         severity = raw.get("Severity")
+        raw_index = raw.get("Index")
         by_label.setdefault(label, []).append(Threshold(
             name=name, direction=direction, value=value,
             severity=int(severity) if isinstance(severity, int) else None,
-            label=label, bound=bound, level=level))
+            label=label, bound=bound, level=level,
+            index=raw_index if isinstance(raw_index, int) else None))
     return by_label
+
+
+def _channel_names(entry: dict[str, Any]) -> list[tuple[int, str]]:
+    """Every channel this entry names, as (hwmon index, name), lowest index first.
+
+    `Name` is channel 1 and `Name<k>` is channel k+1. Keys are matched by pattern
+    rather than against a written-down list, because the corpus runs to `Name17`
+    and any transcribed ceiling silently drops everything above it.
+    """
+    found: list[tuple[int, str]] = []
+    for key, value in entry.items():
+        if key == "Name":
+            index = 1
+        else:
+            match = _CHANNEL_KEY.match(key)
+            if match is None:
+                continue
+            index = int(match.group(1)) + 1
+        if isinstance(value, str) and value:
+            found.append((index, value))
+    return sorted(found)
 
 
 def _read_entry(
     entry: dict[str, Any], record: str | None, source: str, anomalies: list[Anomaly]
 ) -> Iterator[DeclaredSensor]:
-    """Yield one DeclaredSensor per label, or a single unlabelled one."""
-    name = entry.get("Name")
-    if not isinstance(name, str) or not name:
+    """Yield one DeclaredSensor per rail, per channel, or a single plain one.
+
+    Two different conventions let one entry declare several sensors, and they are
+    not the same axis. `Label` fans a pmbus part out over its rails. `Name1`,
+    `Name2`, ... name the further channels of a multi-channel part such as a
+    TMP421's remote input. Where both appear on one entry the resolution is
+    device-class specific -- a `Labels` list can select which channels exist at
+    all -- and cannot be settled from the configuration alone, so that case is
+    reported rather than guessed at.
+    """
+    channels = _channel_names(entry)
+    if not channels:
         return
+    primary = channels[0][1]
     sensor_type = entry.get("Type")
     disabled = str(entry.get("Status", "")).lower() == "disabled"
-    grouped = _read_thresholds(entry, name, source, anomalies)
+    grouped = _read_thresholds(entry, primary, source, anomalies)
 
     labels = [k for k in grouped if k is not None]
+    # `Labels` can be present without any threshold carrying one, and it still
+    # means the part is addressed per rail.
+    label_driven = bool(labels) or bool(entry.get("Labels"))
+
+    if len(channels) > 1 and label_driven:
+        anomalies.append(Anomaly(
+            "ambiguous_channel_naming", source,
+            f"entry names {len(channels)} channels "
+            f"({', '.join(name for _, name in channels)}) and is also addressed "
+            f"per rail, so which channels exist and what each is called depends "
+            f"on the device class rather than on this file. Only {primary!r} is "
+            f"counted; any further channel is neither declared nor diffed",
+            primary))
+
     if labels:
         # A labelled entry declares one sensor per rail. Any unlabelled
         # thresholds on the same entry apply to all of them.
         shared = tuple(grouped.get(None, ()))
         for label in labels:
             yield DeclaredSensor(
-                name=name, type=sensor_type, label=label, record=record,
+                name=primary, type=sensor_type, label=label, record=record,
                 source=source, thresholds=tuple(grouped[label]) + shared,
                 disabled_in_config=disabled)
-    else:
+        return
+
+    if len(channels) > 1 and label_driven:
+        yield DeclaredSensor(
+            name=primary, type=sensor_type, label=None, record=record,
+            source=source, thresholds=tuple(grouped.get(None, ())),
+            disabled_in_config=disabled)
+        return
+
+    # One sensor per channel. A threshold carrying `Index` guards that channel
+    # alone; one carrying none guards the whole entry. Index filtering is applied
+    # only when there is more than one channel, so a single-channel entry keeps
+    # every threshold it has always kept.
+    unlabelled = tuple(grouped.get(None, ()))
+    seen: set[str] = set()
+    for index, name in channels:
+        if name in seen:
+            anomalies.append(Anomaly(
+                "duplicate_channel_name", source,
+                f"channels {index} and earlier are both named {name!r}, so they "
+                f"cannot be told apart in a diff; the later one is dropped",
+                name))
+            continue
+        seen.add(name)
+        thresholds = unlabelled if len(channels) == 1 else tuple(
+            t for t in unlabelled if t.index is None or t.index == index)
         yield DeclaredSensor(
             name=name, type=sensor_type, label=None, record=record, source=source,
-            thresholds=tuple(grouped.get(None, ())), disabled_in_config=disabled)
+            thresholds=thresholds, disabled_in_config=disabled)
 
 
 def parse_config_text(text: str, source: str = "<text>") -> Declaration:

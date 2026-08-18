@@ -111,31 +111,77 @@ class TestTheDocumentedFindingsReproduce:
         assert len({s.label for s in hsc}) == len(hsc), \
             "rails collapsed together; a labelled entry is several sensors"
 
-    def test_an_entry_labels_array_is_not_read(self, corpus):
-        """A LEAD, pinned so it cannot be forgotten, not a passing behaviour.
+    def test_the_labels_array_is_read_only_to_detect_the_channel_overlap(self, corpus):
+        """The replacement for a lead that has now been answered.
 
-        Upstream marks the rails on a pmbus entry with a `Labels` array. This
-        parser never reads that key — expansion comes only from threshold
-        labels. Five entries across four vendored files carry one. A sensor
-        declared through `Labels` alone, with no per-rail thresholds, would be
-        invisible to this tool.
+        The lead read: *this parser never consults an entry's `Labels` array, and
+        a sensor declared through `Labels` alone would be invisible to it*. Half
+        of that is still true and half is not, and the difference is the point.
 
-        Whether that is a defect is unmeasured. This test fails the day the
-        parser starts reading the key, which is the moment the question gets an
-        answer and this test should be replaced by one asserting the new
-        behaviour.
+        `Labels` is now read, for exactly one purpose: an entry that carries both
+        a `Labels` array and several `Name<n>` channels is ambiguous, because the
+        list can select which channels exist at all, and the resolution belongs to
+        the device class rather than to this file. That case is reported.
+
+        Expansion into rails is still driven only by per-threshold `Label`. So the
+        original open question survives untouched: a sensor declared through
+        `Labels` alone, with no per-rail thresholds, is still invisible here.
         """
-        from bmc_sensor_audit.inventory import entity_manager
-        source = Path(entity_manager.__file__).read_text()
-        assert '"Labels"' not in source and "'Labels'" not in source, \
-            "the parser now reads the Labels array — re-measure whether any " \
-            "sensor was being missed, and update the fixture README's lead"
-
         delta = [s for s in corpus.sensors
                  if s.source.endswith("awf2dc3200w_psu.json")]
         assert delta, "the ignored-Labels example declares nothing at all"
         assert not any(s.label for s in delta), \
-            "delta now yields labelled sensors; the lead has changed shape"
+            "reading `Labels` has turned into rail expansion; that is a bigger " \
+            "change than the channel fix and needs its own measurement"
+
+        overlapping = [a for a in corpus.anomalies
+                       if a.kind == "ambiguous_channel_naming"]
+        assert overlapping, \
+            "no vendored entry exercises the Labels-plus-channels overlap any " \
+            "more; the fixture set no longer covers the case it is pinned for"
+        assert all(a.source.endswith("cx7_mezzanine_module.json")
+                   for a in overlapping)
+
+    def test_every_declared_channel_is_derived_not_transcribed(self, corpus):
+        """The pin that would have caught the original defect.
+
+        It asserts a PROPERTY, not a number: the set of names the reader produces
+        equals the set a second, independent reading of the raw JSON says it
+        should. No count is written down here, so the test keeps working when the
+        corpus pin moves — and a count is exactly what the old tests pinned while
+        the reader was quietly dropping channels.
+
+        Set equality in both directions on purpose. Containment would pass while
+        the reader invented a name, and this defect's own symptom was a name
+        appearing on one side and not the other.
+        """
+        expected: set[str] = set()
+        for path in sorted(UPSTREAM.rglob("*.json")):
+            text = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.S)
+            document = json.loads(text)
+            for record in (document if isinstance(document, list) else [document]):
+                if not isinstance(record, dict):
+                    continue
+                for entry in record.get("Exposes") or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    channels = [
+                        value for key, value in entry.items()
+                        if (key == "Name" or re.fullmatch(r"Name\d+", key))
+                        and isinstance(value, str) and value]
+                    if not channels:
+                        continue
+                    thresholds = [t for t in entry.get("Thresholds") or []
+                                  if isinstance(t, dict)]
+                    per_rail = any(t.get("Label") for t in thresholds)
+                    # A rail-addressed entry, or one where rails and channels
+                    # overlap, contributes its first name only.
+                    if per_rail or (entry.get("Labels") and len(channels) > 1):
+                        expected.add(channels[0])
+                    else:
+                        expected.update(channels)
+
+        assert {s.name for s in corpus.sensors} == expected
 
     @pytest.mark.parametrize("token,filename", [
         ("$index", "8x25_hsbp.json"),

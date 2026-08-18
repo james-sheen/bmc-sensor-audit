@@ -55,10 +55,19 @@ class TestNothingVanishes:
     def test_the_golden_counts(self, built):
         """Pinned against the vendored corpus, which is itself pinned to
         `openbmc/entity-manager@0ada0483`. A change here means the generator's
-        behaviour moved and should be explained, not re-baselined by reflex."""
+        behaviour moved and should be explained, not re-baselined by reflex.
+
+        Moved once, 65 -> 68, and here is the explanation. The declaration reader
+        began counting the further channels of a multi-channel part -- `Name1`
+        and up -- which it had been discarding. Three of them are in
+        `meta/fbyv2.json`, all carrying thresholds, so all three generate rather
+        than landing in an exclusion bucket. The other four counts are unchanged,
+        which is the check that this was a gain and not a reshuffle: nothing
+        moved between the ledger's columns.
+        """
         _, _, manifest = built
         counts = manifest.counts()
-        assert counts["generated"] == 65
+        assert counts["generated"] == 68
         assert counts["excluded_templated_name"] == 11
         assert counts["excluded_not_a_sensor"] == 14
         assert counts["excluded_no_thresholds"] == 4
