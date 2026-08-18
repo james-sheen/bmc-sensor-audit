@@ -62,8 +62,36 @@ jobs:
         # The engine is an optional extra. If Stage 1 ever acquires a hard dependency
         # on it, that is a design regression and it should fail here rather than be
         # discovered by someone on a bring-up bench with nothing provisioned.
+        #
+        # This step asserts an EXIT CODE, and the reason is worth writing down. With
+        # the engine uninstalled the bridge module skips at import, so pytest collects
+        # nothing and exits 5 -- EXIT_NOTESTSCOLLECTED. The previous version piped that
+        # into `tail` under `set -o pipefail`, which failed the step on every run this
+        # workflow has ever had, while the property it checks was true the whole time.
+        # A red for the mechanism rather than the outcome, and one that ran for weeks
+        # because nobody reads a job that has never been green.
+        #
+        # 5 is REQUIRED, not merely tolerated. Exit 0 would mean the bridge tests ran,
+        # which would mean the uninstall did not take and this step proved nothing.
+        # That vacuous pass is the failure mode worth guarding against here, because
+        # it is indistinguishable from success at a glance.
         run: |
           set -euo pipefail
           python3 -m pip uninstall --quiet --yes arbiter-engine
           PYTHONPATH=src python3 -c "import bmc_sensor_audit.cli; print('  Stage 1 imports with no engine present')"
-          PYTHONPATH=src python3 -m pytest tests/test_engine_bridge.py -q 2>&1 | tail -2
+
+          set +e
+          OUTPUT=$(PYTHONPATH=src python3 -m pytest tests/test_engine_bridge.py -q -rs 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUTPUT" | tail -3
+
+          if [ "$STATUS" -ne 5 ]; then
+            echo "expected pytest to collect nothing (exit 5, engine absent); got $STATUS" >&2
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -q "arbiter-engine is the optional" || {
+            echo "the bridge module skipped for a reason other than the missing engine" >&2
+            exit 1
+          }
+          echo "  bridge tests skipped for the right reason, and nothing ran"
