@@ -22,14 +22,18 @@ corrupts a naive parser:
     `temp1` -- and 748 entries in the corpus use them, one with 33. Counting
     `Exposes` entries counts boards, not sensors.
 
-4.  **A multi-channel part names its other channels `Name1`, `Name2`, ...**
-    A TMP421 has a local and a remote input; the configuration writes `Name`
-    and `Name1`, and a reader that takes only `Name` discards the rest. 115
-    entries carry at least one, the suffixes run to `Name17`, and this is a
-    different axis from `Label`: a threshold's `Index` binds it to a channel,
-    while `Label` binds it to a rail. Found only by capturing a real board,
-    which reported a sensor this reader had dropped -- no fixture could show
-    it, because the fixtures are generated from this reader.
+4.  **A multi-channel part names its other channels, in two spellings.**
+    Positionally -- `Name1`, `Name2`, running to `Name17` in the corpus -- and
+    by quantity, `NameHumidity` and `NamePressure`, for a part measuring two
+    different things. A reader that takes only `Name` discards the rest. This
+    is a different axis from `Label`: a threshold's `Index` binds it to a
+    channel, `Label` binds it to a rail, and an entry carrying both a `Labels`
+    list and several channels is ambiguous rather than simply larger.
+    Found only by capturing a real board, which reported a sensor this reader
+    had dropped -- no fixture could show it, because the fixtures are generated
+    from this reader. The quantity spelling was then nearly missed a second
+    time: the corpus checkout had renamed `NameHumidity` to `Name1`, while the
+    revision this repository vendors still uses the older key.
 
 5.  **Roughly one name in eight is a template.** `$bus`, `$ADDRESS`, `$index`
     are substituted at runtime, so the declared string never appears on the
@@ -106,6 +110,25 @@ _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 # convention at all: 115 entries carry at least one, the suffixes run to `Name17`,
 # and reading only `Name` discards every channel after the first.
 _CHANNEL_KEY = re.compile(r"^Name(\d+)$")
+
+# A second spelling for the same idea, and the reason the numeric pattern alone is
+# not enough: a part measuring two different QUANTITIES names the second one after
+# the quantity rather than by position. `NameHumidity` on a temperature/humidity
+# part, `NamePressure` on a DPS310.
+#
+# Both sets below were derived by enumerating every `Name`-prefixed key across all
+# 349 configuration files at the pinned revision. That mattered: the corpus
+# checkout this was first written against had already renamed `NameHumidity` to
+# `Name1`, so the numeric pattern looked complete while the pinned files -- the
+# ones this repository actually vendors -- still used the older spelling.
+_CHANNEL_SUFFIXES = frozenset({"humidity", "pressure"})
+
+# `Name`-prefixed keys that are NOT channels. `Names` is a list, so the string
+# check would exclude it anyway; it is named here so the exclusion is documented
+# rather than incidental. `NamedPresenceGpio` is `Named` + `PresenceGpio` and
+# carries a GPIO line name -- a string, so nothing but this list separates it from
+# a channel.
+_NOT_A_CHANNEL = frozenset({"Names", "NamedPresenceGpio"})
 
 
 @dataclass(frozen=True)
@@ -291,25 +314,47 @@ def _read_thresholds(
     return by_label
 
 
-def _channel_names(entry: dict[str, Any]) -> list[tuple[int, str]]:
-    """Every channel this entry names, as (hwmon index, name), lowest index first.
+def _channel_names(
+    entry: dict[str, Any]
+) -> tuple[list[tuple[int | None, str]], list[str]]:
+    """Every channel this entry names, plus the `Name*` keys it could not classify.
 
-    `Name` is channel 1 and `Name<k>` is channel k+1. Keys are matched by pattern
-    rather than against a written-down list, because the corpus runs to `Name17`
-    and any transcribed ceiling silently drops everything above it.
+    Channels come back as (hwmon index, name): positional ones first in index
+    order, then quantity-named ones alphabetically. `Name` is channel 1 and
+    `Name<k>` is channel k+1, matched by pattern because the corpus runs to
+    `Name17` and any transcribed ceiling drops the rest in silence. A
+    quantity-named channel has no index, so it takes only the thresholds that
+    name none.
+
+    The second return value is the third bucket: a `Name`-prefixed string key
+    that is neither a known non-channel nor a recognised quantity. It is NOT
+    counted as a channel -- inventing a declaration makes a healthy board report
+    a missing sensor, which is the worse of the two errors -- but it is reported,
+    so an unrecognised member cannot pass silently the way this whole family of
+    defect has before.
     """
-    found: list[tuple[int, str]] = []
+    positional: list[tuple[int, str]] = []
+    named: list[str] = []
+    unrecognised: list[str] = []
     for key, value in entry.items():
+        if not key.startswith("Name") or key in _NOT_A_CHANNEL:
+            continue
+        if not isinstance(value, str) or not value:
+            continue
         if key == "Name":
-            index = 1
+            positional.append((1, value))
+            continue
+        match = _CHANNEL_KEY.match(key)
+        if match is not None:
+            positional.append((int(match.group(1)) + 1, value))
+        elif key[len("Name"):].lower() in _CHANNEL_SUFFIXES:
+            named.append(value)
         else:
-            match = _CHANNEL_KEY.match(key)
-            if match is None:
-                continue
-            index = int(match.group(1)) + 1
-        if isinstance(value, str) and value:
-            found.append((index, value))
-    return sorted(found)
+            unrecognised.append(key)
+    channels: list[tuple[int | None, str]] = [
+        (index, name) for index, name in sorted(positional)]
+    channels += [(None, name) for name in sorted(named)]
+    return channels, unrecognised
 
 
 def _read_entry(
@@ -325,10 +370,19 @@ def _read_entry(
     all -- and cannot be settled from the configuration alone, so that case is
     reported rather than guessed at.
     """
-    channels = _channel_names(entry)
+    channels, unrecognised = _channel_names(entry)
     if not channels:
         return
     primary = channels[0][1]
+
+    for key in unrecognised:
+        anomalies.append(Anomaly(
+            "unrecognised_name_key", source,
+            f"{key!r} looks like it names a further channel, but it is neither a "
+            f"positional `Name<n>` nor a quantity this tool knows. It is left "
+            f"undeclared rather than guessed at: counting it would make a healthy "
+            f"board report a sensor that was never there",
+            primary))
     sensor_type = entry.get("Type")
     disabled = str(entry.get("Status", "")).lower() == "disabled"
     grouped = _read_thresholds(entry, primary, source, anomalies)

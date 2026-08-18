@@ -31,8 +31,14 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(ROOT / "src"))
 
+# The two key sets are imported rather than restated, so this oracle cannot drift
+# from the reader it checks — a vocabulary written down twice will diverge. The
+# ALGORITHM below stays a deliberately separate implementation; only the
+# vocabulary is shared.
 from bmc_sensor_audit.inventory.entity_manager import (  # noqa: E402
-    ANY_TEMPLATE, load_declaration)
+    ANY_TEMPLATE, load_declaration,
+    _CHANNEL_SUFFIXES as CHANNEL_SUFFIXES,
+    _NOT_A_CHANNEL as NOT_A_CHANNEL)
 
 
 @pytest.fixture(scope="module")
@@ -167,8 +173,10 @@ class TestTheDocumentedFindingsReproduce:
                         continue
                     channels = [
                         value for key, value in entry.items()
-                        if (key == "Name" or re.fullmatch(r"Name\d+", key))
-                        and isinstance(value, str) and value]
+                        if isinstance(value, str) and value
+                        and key not in NOT_A_CHANNEL
+                        and (key == "Name" or re.fullmatch(r"Name\d+", key)
+                             or key[4:].lower() in CHANNEL_SUFFIXES)]
                     if not channels:
                         continue
                     thresholds = [t for t in entry.get("Thresholds") or []
@@ -246,3 +254,11 @@ class TestTheGapsAreStated:
         in the same change — otherwise the document outlives the fact."""
         assert not any("$Name" in s.name for s in corpus.sensors), \
             "a fixture now exercises $Name; update the README's gap list"
+
+    def test_no_vendored_entry_carries_an_unrecognised_name_key(self, corpus):
+        """The third bucket must be empty for files already vendored. If it fills,
+        a newly added fixture uses a channel spelling this reader does not know,
+        and the answer is to measure the producer again -- not to widen a pattern
+        until the anomaly goes away."""
+        unknown = [a for a in corpus.anomalies if a.kind == "unrecognised_name_key"]
+        assert unknown == [], [a.detail for a in unknown]

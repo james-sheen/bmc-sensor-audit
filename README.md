@@ -34,19 +34,22 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 278 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 286 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
 reproducible by a reader** rather than only by us — nine upstream configurations
 are vendored, and each documented finding has a test that runs against them.
-**Criterion 2 is met only
-against synthetic fixtures** — both tree shapes are proven, but by fixtures this
-project's own mock generated, so the same code wrote and read them. That proves
-the walker handles each shape and that the recorded format round-trips; it
-cannot prove either shape resembles a real BMC. A capture from real hardware is
-still wanted, and until there is one, criterion 2 is not honestly closed.
+**Criterion 2 is now half met against real firmware.** The modern `Sensors` tree
+shape is proven against a capture from upstream `bmcweb` running under QEMU —
+`tests/fixtures/walk_qemu_bletchley.json`, 28 sensors, provenance recorded in the
+file. Nothing in that walk was written by this project. The **deprecated
+`Thermal`/`Power` shape is still proven only against synthetic fixtures**, because
+current `bmcweb` on a current platform does not serve it. A capture from
+**physical** hardware is still wanted — for sensor-population realism, real fault
+states, and vendor Redfish dialects other than `bmcweb` — and until there is one,
+criterion 2 is not honestly closed.
 
 ## Try it
 
@@ -110,9 +113,9 @@ a disabled sensor does not appear in most BMC web UIs at all.
 **Not every `Exposes` entry is a sensor**, and treating them alike is how a tool
 reports a healthy board as broken. PID control loops, stepwise fan curves, EEPROMs,
 firmware images, I2C muxes and GPIO presence detectors are declared exactly like
-sensors and can never appear in a Redfish `Sensors` collection — **2,121 of 8,684
-upstream declarations, about 24 %**. They are classified out of the expectation and
-counted, never silently dropped.
+sensors and can never appear in a Redfish `Sensors` collection — **2,069 of 8,809
+upstream declarations, about 23 %**, measured at the pinned revision. They are
+classified out of the expectation and counted, never silently dropped.
 
 The classification is **three-valued for the same reason presence is**: a `Type` this
 build has never seen is reported as *unrecognised* rather than forced into whichever
@@ -146,9 +149,10 @@ silently corrupts a naive implementation:
 - **One `Exposes` entry can declare several sensors.** Hot-swap controllers carry
   a `Label` per rail; 1,132 entries use them and one declares 33. Counting
   entries counts boards, not sensors. **The expansion comes from per-threshold
-  `Label` fields, not from an entry's `Labels` array** — which this parser does
-  not read at all, and which is an open question rather than a settled one.
-- **709 of 8,684 declared sensor names are runtime templates** — about one in
+  `Label` fields, not from an entry's `Labels` array** — which this parser reads
+  only to detect its overlap with channel names, never to expand on. Whether a
+  sensor declared through `Labels` alone is invisible here remains open.
+- **709 of 8,809 declared sensor names are runtime templates** — about one in
   twelve (`$bus`, `$address`, `$index`). Compared literally, every one of them
   reads as missing on a healthy board. `CONFIG_FORMAT.md` documents three such
   variables; the corpus uses five.
@@ -316,12 +320,18 @@ a diff is safe to publish.
   `tests/fixtures/upstream/`, with Intel's copyright and the upstream licence
   carried alongside, and every documented parser finding is now runnable from a
   clone, **pinned to `0ada048303bb007c9d7ec3a6a90433169f05dd99`**. What they
-  cannot reproduce are the corpus-wide counts — 349 files, 8,684 sensors, 709
+  cannot reproduce are the corpus-wide counts — 349 files, 8,809 sensors, 709
   templated names, 15,860 thresholds — which need the full corpus. The first
   attempt at this directory was unpinned, and within a day two of its nine files
   had been renamed upstream and every count had moved; the shapes did not.
   `tests/fixtures/upstream/README.md` records what each file is for, what the set
   does not cover, and one open lead it found.
-- **The recorded walk fixtures are synthetic.** See the Status note. Both tree
-  shapes are proven against fixtures this project's own mock generated, which
-  proves the walker and not the shapes.
+- **One recorded walk is real; the rest are synthetic.**
+  `tests/fixtures/walk_qemu_bletchley.json` was captured from upstream `bmcweb`
+  under QEMU and proves the modern `Sensors` shape against firmware this project
+  did not write. The two `walk_*_tree.json` fixtures remain generated by this
+  project's own mock, and the deprecated `Thermal`/`Power` shape is still proven
+  only by them. The capture also has a floor of its own: QEMU wires a subset of
+  the board's devices, so the population is partial by construction, and a
+  synthetic FRU had to be written into the emulated EEPROM before entity-manager
+  would instantiate the board at all.

@@ -253,3 +253,65 @@ def test_the_two_fixtures_describe_the_same_machine():
                 for s in walk}
 
     assert facts("walk_sensors_tree.json") == facts("walk_thermal_power_tree.json")
+
+
+def test_a_captured_walk_is_vendored_and_declares_what_it_is():
+    """The first recorded walk here that this repository did not write.
+
+    Everything else under `fixtures/` came out of this project's own mock, so the
+    same code wrote and read it. This one came from `bmcweb` running under QEMU
+    on an upstream OpenBMC image, which is the only thing in the repository that
+    can contradict the walker.
+
+    The provenance string is asserted field by field because a capture without
+    it is unreproducible: an image that cannot be identified is a fixture nobody
+    can regenerate, and the first attempt at the upstream config directory was
+    unpinned and had drifted within a day.
+    """
+    payload = json.loads((FIXTURES / "walk_qemu_bletchley.json").read_text())
+    provenance = payload["_provenance"]
+    assert "CAPTURED" in provenance
+    assert "SYNTHETIC" not in provenance
+    for fact in ("bletchley-bmc", "10.2.1", "latest-master build 1714", "bmcweb",
+                 "obmc-phosphor-image-bletchley-20260815025045.static.mtd",
+                 "eeprom@56"):
+        assert fact in provenance, f"the provenance no longer records {fact!r}"
+
+    walk = walk_from_dict(payload)
+    assert walk.complete
+    assert [s.name for s in walk] == [s["name"] for s in payload["sensors"]], \
+        "the recorded format no longer round-trips a real capture"
+    assert payload["shapes_seen"] == ["sensors"], \
+        "the capture no longer carries the modern tree shape it was taken for"
+    assert all(s.units for s in walk), "a real capture with a unitless sensor"
+
+
+def test_the_captured_walk_is_not_the_mock_wearing_a_new_name():
+    """Guards the one property the fixture exists for. If its sensors ever match
+    what the mock serves, someone has regenerated it locally and the criterion-2
+    evidence has quietly become circular again."""
+    captured = walk_from_dict(
+        json.loads((FIXTURES / "walk_qemu_bletchley.json").read_text()))
+    synthetic = walk_from_dict(
+        json.loads((FIXTURES / "walk_sensors_tree.json").read_text()))
+    assert not ({s.name for s in captured} & {s.name for s in synthetic})
+
+
+def test_every_vendored_walk_declares_its_provenance():
+    """Derived from the directory, never from a list written here. A fixture
+    added without provenance is exactly the drift this checks for, and a
+    transcribed filename list would not see it."""
+    walks = sorted(FIXTURES.glob("walk_*.json"))
+    assert len(walks) >= 3, "the walk fixture set shrank"
+    kinds = {}
+    for path in walks:
+        payload = json.loads(path.read_text())
+        assert "_provenance" in payload, f"{path.name} carries no provenance"
+        kinds[path.name] = ("CAPTURED" if "CAPTURED" in payload["_provenance"]
+                            else "SYNTHETIC" if "SYNTHETIC" in payload["_provenance"]
+                            else "UNDECLARED")
+    assert "UNDECLARED" not in kinds.values(), kinds
+    assert "CAPTURED" in kinds.values(), \
+        "no captured walk remains; criterion 2 is back to fixtures this project wrote"
+    assert "SYNTHETIC" in kinds.values(), \
+        "the synthetic pair covers the deprecated tree shape and must not be dropped"

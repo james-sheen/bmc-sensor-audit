@@ -257,3 +257,55 @@ def test_two_channels_sharing_a_name_are_reported():
     declaration = parse_config_text(json.dumps(cfg))
     assert [s.name for s in declaration.sensors] == ["same"]
     assert [a.kind for a in declaration.anomalies] == ["duplicate_channel_name"]
+
+
+def test_a_quantity_named_channel_is_declared():
+    """The second spelling, and the one that hid behind a revision. At the pinned
+    corpus revision a temperature/humidity part names its second channel
+    `NameHumidity`; a later revision renamed it to `Name1`. A reader written
+    against the newer checkout looks complete and still drops it, because the
+    files this repository vendors are the older ones."""
+    cfg = {"Exposes": [{"Name": "FRONT_PANEL_TEMP", "Type": "SI7020",
+                        "NameHumidity": "FRONT_PANEL_HUMIDTY"},
+                       {"Name": "T", "Type": "DPS310", "NamePressure": "P"}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == [
+        "FRONT_PANEL_TEMP", "FRONT_PANEL_HUMIDTY", "T", "P"]
+    assert declaration.anomalies == []
+
+
+def test_a_name_prefixed_key_that_is_not_a_channel_is_quietly_ignored():
+    """`NamedPresenceGpio` is `Named` + `PresenceGpio` and holds a GPIO line name.
+    It is a string, like every real channel key, so nothing but knowing it
+    separates the two -- and it must stay SILENT. A rule that reported it would
+    fire on 12 corpus entries every run, and a row that is red for a good reason
+    every run is one people learn to skip."""
+    cfg = {"Exposes": [{"Name": "CPU", "Type": "XeonCPU",
+                        "NamedPresenceGpio": "presence-cpu0"},
+                       {"Name": "X", "Type": "Pid", "Names": ["a", "b"]}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == ["CPU", "X"]
+    assert declaration.anomalies == []
+
+
+def test_an_unrecognised_name_key_is_reported_and_not_counted():
+    """The third bucket. Counting it would invent a declaration and make a
+    healthy board report a missing sensor -- the failure this tool exists to
+    catch elsewhere -- so it is left undeclared and said out loud instead."""
+    cfg = {"Exposes": [{"Name": "A", "Type": "Weird", "NameFlowRate": "F"}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert [s.name for s in declaration.sensors] == ["A"]
+    assert [a.kind for a in declaration.anomalies] == ["unrecognised_name_key"]
+    assert "NameFlowRate" in declaration.anomalies[0].detail
+
+
+def test_a_quantity_named_channel_takes_only_unindexed_thresholds():
+    """It has no hwmon position, so an `Index`-bearing threshold is not its."""
+    cfg = {"Exposes": [{"Name": "T", "NameHumidity": "H", "Type": "SI7020",
+                        "Thresholds": [
+                            {"Direction": "greater than", "Name": "upper critical",
+                             "Value": 60, "Index": 2},
+                            {"Direction": "less than", "Name": "lower critical",
+                             "Value": 5}]}]}
+    by_name = {s.name: s for s in parse_config_text(json.dumps(cfg)).sensors}
+    assert [t.value for t in by_name["H"].thresholds] == [5.0]
