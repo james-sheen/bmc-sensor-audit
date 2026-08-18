@@ -34,12 +34,12 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 286 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 289 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
-reproducible by a reader** rather than only by us — nine upstream configurations
+reproducible by a reader** rather than only by us — twelve upstream configurations
 are vendored, and each documented finding has a test that runs against them.
 **Criterion 2 is now half met against real firmware.** The modern `Sensors` tree
 shape is proven against a capture from upstream `bmcweb` running under QEMU —
@@ -316,7 +316,7 @@ a diff is safe to publish.
 ## Still open
 
 - **The corpus-wide totals are still not reproducible, though the findings now
-  are.** Nine upstream configurations are vendored verbatim under
+  are.** Twelve upstream configurations are vendored verbatim under
   `tests/fixtures/upstream/`, with Intel's copyright and the upstream licence
   carried alongside, and every documented parser finding is now runnable from a
   clone, **pinned to `0ada048303bb007c9d7ec3a6a90433169f05dd99`**. What they

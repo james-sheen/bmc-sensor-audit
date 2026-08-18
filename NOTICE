@@ -17,7 +17,7 @@ project or DMTF.
 
 REDISTRIBUTED THIRD-PARTY CONTENT
 
-`tests/fixtures/upstream/` contains nine configuration files copied verbatim from
+`tests/fixtures/upstream/` contains twelve configuration files copied verbatim from
 the OpenBMC `entity-manager` project:
 
     Copyright 2018 Intel Corporation
@@ -25,9 +25,9 @@ the OpenBMC `entity-manager` project:
     https://github.com/openbmc/entity-manager
 
 Their licence is reproduced unmodified at `tests/fixtures/upstream/LICENCE`,
-spelled as upstream spells it. The nine files are unmodified and byte-identical to
-their sources. `tests/fixtures/upstream/README.md` records which documented
-finding each one reproduces, why these nine were chosen, and what they do not
+spelled as upstream spells it. The twelve files are unmodified and byte-identical
+to their sources. `tests/fixtures/upstream/README.md` records which documented
+finding each one reproduces, why these twelve were chosen, and what they do not
 cover.
 
 Pinned to upstream commit:

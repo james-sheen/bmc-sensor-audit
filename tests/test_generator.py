@@ -57,21 +57,27 @@ class TestNothingVanishes:
         `openbmc/entity-manager@0ada0483`. A change here means the generator's
         behaviour moved and should be explained, not re-baselined by reflex.
 
-        Moved once, 65 -> 68, and here is the explanation. The declaration reader
-        began counting the further channels of a multi-channel part -- `Name1`
-        and up -- which it had been discarding. Three of them are in
-        `meta/fbyv2.json`, all carrying thresholds, so all three generate rather
-        than landing in an exclusion bucket. The other four counts are unchanged,
-        which is the check that this was a gain and not a reshuffle: nothing
-        moved between the ledger's columns.
+        Moved twice, and both moves have an explanation rather than a
+        re-baseline.
+
+        65 -> 68: the declaration reader began counting the further channels of a
+        multi-channel part -- `Name1` and up -- which it had been discarding.
+        Three are in `meta/fbyv2.json`, all carrying thresholds, so all three
+        generate. Every other count held, which is what showed it was a gain and
+        not a reshuffle between the ledger's columns.
+
+        68 -> 106: three `meta/bletchley/` configurations were vendored, to make
+        a real coverage diff reproducible from a clone. This move is the opposite
+        shape -- every column grows, because a whole platform arrived rather than
+        a handful of channels on files already here.
         """
         _, _, manifest = built
         counts = manifest.counts()
-        assert counts["generated"] == 68
+        assert counts["generated"] == 106
         assert counts["excluded_templated_name"] == 11
-        assert counts["excluded_not_a_sensor"] == 14
-        assert counts["excluded_no_thresholds"] == 4
-        assert counts["with_lower_bound"] == 53
+        assert counts["excluded_not_a_sensor"] == 24
+        assert counts["excluded_no_thresholds"] == 19
+        assert counts["with_lower_bound"] == 87
 
 
 class TestTheModelIsWellFormed:

@@ -1,6 +1,6 @@
 # Vendored upstream configurations
 
-Nine `entity-manager` configuration files, copied **verbatim** from the OpenBMC
+Twelve `entity-manager` configuration files, copied **verbatim** from the OpenBMC
 project. Copyright 2018 Intel Corporation, Apache-2.0, licence reproduced beside
 them in `LICENCE` (spelled as upstream spells it).
 
@@ -9,8 +9,10 @@ byte-identical to that revision.
 
 They exist because acceptance criterion 1 was proven by a run nobody else could
 reproduce. The parser claims were measured against a local checkout, by path.
-True, and unverifiable by any reader. These nine make each documented claim
-runnable from a clone.
+True, and unverifiable by any reader. These twelve make each documented claim
+runnable from a clone — and the three `meta/bletchley/` files go further: paired
+with `tests/fixtures/walk_qemu_bletchley.json` they make the whole coverage diff
+reproducible from a clone, declaration and machine both.
 
 **Do not edit these files.** They are third-party content and their value is that
 they are exactly what upstream ships. A fixture edited to make a test pass proves
@@ -51,6 +53,9 @@ revision nobody can identify.**
 | `meta/fbyv2.json` | Also **multi-channel parts**: three TMP421 entries whose remote input is named `Name1`, which this reader discarded until a capture against real firmware reported them. |
 | `meta/fbyv2.json` | **Upstream defect 1**: a `temp1` threshold named `upper critical` with `Direction: less than`. Also **one `Exposes` entry declaring several sensors** — its single `HSC` entry expands to eight, one per rail. |
 | `meta/fbyv35.json` | **Upstream defect 2**, same shape, and the widest threshold-name vocabulary in the corpus. |
+| `meta/bletchley/bletchley_baseboard.json` | The **declaration half of the end-to-end reproduction** — 13 `Labels` entries, and the two `Name1` TMP421 channels that real firmware reported while this reader was discarding them. |
+| `meta/bletchley/bletchley_chassis.json` | A record probing on `FOUND('Bletchley Baseboard')` — a board that exists only because another one does. |
+| `meta/bletchley/bletchley_frontpanel.json` | **`NameHumidity`**, the quantity-named channel spelling. Later revisions renamed it to `Name1`, so a reader written against a current checkout looks complete and still drops it here. |
 
 ## What these do NOT cover
 
@@ -62,9 +67,9 @@ gap.
   inventory values** — a genuine spare part number in one case. Vendoring one
   would mean either committing that value or exempting a file from the hygiene
   check. The parser handles `$Name`; nothing here proves it.
-- **The corpus-wide totals are not reproduced.** 349 files, 8,684 sensors, 709
+- **The corpus-wide totals are not reproduced.** 349 files, 8,809 sensors, 709
   templated names, 15,860 thresholds — those come from the full corpus and cannot
-  be recomputed from nine files. These fixtures prove the *findings*, not the
+  be recomputed from twelve files. These fixtures prove the *findings*, not the
   *totals*.
 
 ## One open lead, with a fixture for it
@@ -72,7 +77,7 @@ gap.
 **This parser does not EXPAND on an `Exposes` entry's `Labels` array.** Multi-sensor
 expansion comes only from per-threshold `Label` fields — the opposite of the
 obvious reading, and choosing a fixture on the obvious reading picked a file that
-demonstrated nothing. Five entries across four of these nine files carry a
+demonstrated nothing. Eighteen entries across five of these twelve files carry a
 `Labels` array that is never expanded on.
 
 **Narrowed 2026-08-18.** The array is now read for one purpose and one only: an
@@ -88,10 +93,11 @@ recorded rather than resolved because measuring it means reading `dbus-sensors`
 to learn what the BMC does with the key — the same unread source the upstream
 defect report already declares as its own limit.
 
-## Why nine and not 349
+## Why twelve and not 349
 
 Vendoring the whole corpus would be megabytes of third-party content in a
 repository whose own source is under 100 KB, and it would need re-syncing forever.
-Nine files carry every documented finding at 128 KB. The selection was made by
+Twelve files carry every documented finding, and the bletchley three add the only
+end-to-end reproduction of a real diff. The selection was made by
 measuring the corpus at the pin for each property and taking the smallest file
 exhibiting it that also passes this project's hygiene check.

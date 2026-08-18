@@ -8,9 +8,11 @@ a claim in a public README is the same as unproven.
 The fixtures are now pinned to `0ada048303bb`. The first attempt was not, and within a
 day two of the nine had been renamed upstream and every corpus count had moved.
 
-`tests/fixtures/upstream/` now carries nine of those files verbatim, chosen by
+`tests/fixtures/upstream/` now carries twelve of those files verbatim, chosen by
 measuring the corpus for each documented property and taking the smallest file
-exhibiting it that also passes this project's hygiene check. This module runs the
+exhibiting it that also passes this project's hygiene check. The three
+`meta/bletchley/` files are there for a different reason: with the captured walk
+beside them they make a real coverage diff reproducible from a clone. This module runs the
 shipped reader over them and asserts each finding actually appears.
 
 **These tests fail if the fixtures are edited.** That is the point — a fixture
@@ -47,8 +49,8 @@ def corpus():
 
 
 class TestTheFixturesArePresentAndLicensed:
-    def test_nine_configurations_are_vendored(self):
-        assert len(list(UPSTREAM.rglob("*.json"))) == 9
+    def test_twelve_configurations_are_vendored(self):
+        assert len(list(UPSTREAM.rglob("*.json"))) == 12
 
     def test_the_upstream_licence_travels_with_them(self):
         """Apache-2.0 requires the notice to accompany redistribution. Upstream
@@ -84,7 +86,7 @@ class TestTheFixturesArePresentAndLicensed:
 
 class TestTheDocumentedFindingsReproduce:
     def test_every_file_is_read_and_none_is_unreadable(self, corpus):
-        assert corpus.files_read == 9
+        assert corpus.files_read == 12
         assert corpus.unreadable == [], corpus.unreadable
         assert len(corpus.sensors) > 0
 
@@ -213,10 +215,18 @@ class TestTheDocumentedFindingsReproduce:
 
     def test_disabled_entries_are_declared_but_marked(self, corpus):
         """Present-but-disabled is the middle value of a three-valued presence,
-        and the case the tool exists for. It must not be dropped at read time."""
+        and the case the tool exists for. It must not be dropped at read time.
+
+        This asserted for a while that every disabled entry came from
+        `spc621d8hm3.json`, which was true when that was the only fixture
+        carrying one and stopped being true the moment the bletchley files were
+        vendored. Exclusivity was never the property under test -- the file was
+        chosen *because* it exercises the case, so that is what is pinned.
+        """
         disabled = [s for s in corpus.sensors if s.disabled_in_config]
         assert disabled, "no disabled-in-config sensor survived the read"
-        assert all(s.source.endswith("spc621d8hm3.json") for s in disabled)
+        assert any(s.source.endswith("spc621d8hm3.json") for s in disabled), \
+            "the fixture vendored for this case no longer exercises it"
 
     @pytest.mark.parametrize("filename,bound", [("fbyv2.json", "105"),
                                                 ("fbyv35.json", "55")])
@@ -262,3 +272,49 @@ class TestTheGapsAreStated:
         until the anomaly goes away."""
         unknown = [a for a in corpus.anomalies if a.kind == "unrecognised_name_key"]
         assert unknown == [], [a.detail for a in unknown]
+
+
+class TestTheEndToEndDiffReproducesFromAClone:
+    """The pair that closes acceptance criterion 1's real gap.
+
+    Every other test here proves a *finding* about the declaration. This one runs
+    the actual product -- declaration against machine -- with both halves committed
+    to the repository: three upstream configuration files at the pin, and a walk
+    captured from upstream `bmcweb` under QEMU. No network, no mock, no hardware.
+
+    Pinning exact counts is normally the wrong instinct, and it is right here for
+    one reason: both inputs are frozen files in this repository, so the numbers
+    cannot drift underneath the test. If they move, the reader moved.
+    """
+
+    @pytest.fixture(scope="class")
+    def report(self):
+        from bmc_sensor_audit.inventory.diff import compare
+        from bmc_sensor_audit.inventory.redfish import walk_from_dict
+        declaration = load_declaration([str(UPSTREAM / "meta" / "bletchley")])
+        walk = walk_from_dict(json.loads(
+            (ROOT / "tests" / "fixtures" / "walk_qemu_bletchley.json").read_text()))
+        return compare(declaration, walk)
+
+    def test_the_diff_matches_what_the_live_run_produced(self, report):
+        from collections import Counter
+        kinds = Counter(f.kind for f in report.findings)
+        assert kinds["matched_inexactly"] == 28
+        assert kinds["declared_absent"] == 25
+        assert report.regressions, "a partial emulation should still report absences"
+
+    def test_nothing_the_machine_reported_is_called_undeclared(self, report):
+        """The regression pin for the channel defect, in the exact shape it was
+        found. Real firmware served MB_U72_THERM_REMOTE and MB_U73_THERM_REMOTE;
+        the reader discarded them, and the diff accused upstream's configuration
+        of omitting sensors it declares as `Name1`. If this count leaves zero,
+        that accusation is back."""
+        undeclared = [f for f in report.findings if f.kind == "undeclared_present"]
+        assert undeclared == [], [f.sensor for f in undeclared]
+
+    def test_the_quantity_named_channel_is_declared_from_the_pinned_file(self):
+        """`bletchley_frontpanel.json` at this pin spells the humidity channel
+        `NameHumidity`; later revisions renamed it `Name1`. It is declared here
+        only because both spellings are read."""
+        declaration = load_declaration([str(UPSTREAM / "meta" / "bletchley")])
+        assert "FRONT_PANEL_HUMIDTY" in {s.name for s in declaration.sensors}
