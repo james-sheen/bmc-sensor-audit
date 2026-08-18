@@ -504,3 +504,173 @@ class TestTheVendoredCaptureRunsTheWholeStage2Path:
                 f"{match.declared.display_name} reads {match.live.reading}, no longer "
                 f"inside the {lower}..{upper} the capture publishes for it -- this pin "
                 "describes a different situation than the one measured")
+
+
+class TestStuckAtAgainstRealFirmware:
+    """Liveness detection against firmware, with ground truth somebody controlled.
+
+    Every other stuck-at test in this repository builds its own series, so it can
+    only show that the code does what the code was written to do. This one replays
+    28 consecutive walks of an emulated machine in which ONE sensor was driven to a
+    new value before each of the first 12 walks and then left alone. Same sensor,
+    same firmware, same pipeline; the only variable is whether somebody kept
+    changing it.
+
+    The assertions do not hardcode which sensors should fire. The fixture carries
+    the readings, so which sensors were genuinely constant is derivable from it,
+    and the engine's verdict is checked against that derived set. A pinned list
+    would only record what this build happened to do on the day.
+    """
+
+    FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "tests" / "fixtures" \
+        / "stuck_at_qemu_bletchley.json"
+
+    @classmethod
+    def _fixture(cls):
+        import json
+        return json.loads(cls.FIXTURE.read_text())
+
+    @staticmethod
+    def _walks(data, count):
+        """Rebuild whole walks from the skeleton and the per-sensor series.
+
+        The 28 walks differ in exactly two fields, which is re-verified when the
+        fixture is generated. Storing them whole would have added a quarter of a
+        megabyte of near-identical JSON to carry 27 more copies of a tree shape
+        `walk_qemu_bletchley.json` already proves.
+        """
+        import copy
+        out = []
+        for index in range(count):
+            walk = copy.deepcopy(data["walk_skeleton"])
+            for sensor in walk["sensors"]:
+                series = data["series"][sensor["name"]]
+                sensor["reading"] = series["reading"][index]
+                sensor["health"] = series["health"][index]
+            out.append(walk)
+        return out
+
+    @classmethod
+    def _evaluate(cls, walks):
+        import sys
+        import tempfile
+        root = pathlib.Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(root / "src"))
+        from bmc_sensor_audit.detect.feeder import evaluate, feed
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.diff import compare
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        from bmc_sensor_audit.inventory.redfish import walk_from_dict
+
+        declaration = load_declaration(
+            [str(root / "tests" / "fixtures" / "upstream" / "meta" / "bletchley")])
+        model, manifest = generate(declaration)
+        path = pathlib.Path(tempfile.mkdtemp()) / "model.yaml"
+        path.write_text(yaml.safe_dump(model))
+        session = EngineSession()
+        session.load_model(str(path))
+        reports = [compare(declaration, walk_from_dict(w)) for w in walks]
+        result = feed(session, manifest, reports)
+        outcome = evaluate(check(session).to_dict(),
+                           model_describe(session).to_dict(), manifest)
+        return result, outcome
+
+    @staticmethod
+    def _constant(walks):
+        """Which sensors never moved, read straight out of the walks."""
+        series = {}
+        for walk in walks:
+            for sensor in walk["sensors"]:
+                series.setdefault(sensor["name"].replace(" ", "_"),
+                                  []).append(sensor["reading"])
+        return {name for name, values in series.items() if len(set(values)) == 1}
+
+    @staticmethod
+    def _stuck_at(outcome):
+        return {f.split()[0].rstrip(":") for f in outcome.findings
+                if "has not changed" in f}
+
+    @classmethod
+    def _driven(cls, data):
+        return data["driven_sensor"].replace(" ", "_")
+
+    def test_the_fixture_still_describes_the_experiment_it_claims(self):
+        """The whole result rests on one sensor moving and then stopping. If an edit
+        ever breaks that, every assertion below would still pass while testing
+        something else entirely."""
+        data = self._fixture()
+        driven = data["driven_sensor"]
+        phase_a = data["phase_a_walks"]
+        readings = data["series"][driven]["reading"]
+        assert len(readings) == data["walks"] == 28
+        assert len(set(readings[:phase_a])) > 1, "the driven phase does not move"
+        assert len(set(readings[phase_a:])) == 1, "the frozen phase is not frozen"
+        assert "what this is not: a sensor failure" in data["_provenance"].lower(), \
+            "the fixture no longer states that the freeze is an experiment"
+
+    def test_while_it_was_driven_it_was_not_flagged(self):
+        """And the silence is a verdict, not a shrug.
+
+        `warming_up` is asserted empty for the driven sensor first: below the sample
+        floor STABILITY declines rather than passing, and a decline would produce the
+        same absence of a finding for an entirely different reason. Twelve walks is
+        past the floor, so the engine looked and found nothing wrong.
+        """
+        data = self._fixture()
+        walks = self._walks(data, data["phase_a_walks"])
+        result, outcome = self._evaluate(walks)
+        driven = self._driven(data)
+
+        assert driven not in result.warming_up, \
+            "below the sample floor: silence here would mean not-yet-checked"
+        assert driven not in self._stuck_at(outcome)
+
+    def test_the_engine_finds_exactly_the_sensors_that_did_not_move(self):
+        """The claim that makes the rest evidence rather than anecdote.
+
+        Which sensors sat still is a fact about the walks, computable without asking
+        the engine. Over the driven phase the two sets are equal -- no false positive
+        and nothing missed -- against readings production firmware served.
+        """
+        data = self._fixture()
+        walks = self._walks(data, data["phase_a_walks"])
+        _, outcome = self._evaluate(walks)
+        assert self._stuck_at(outcome) == self._constant(walks)
+
+    def test_once_it_stopped_being_driven_it_was_flagged(self):
+        data = self._fixture()
+        walks = self._walks(data, data["walks"])
+        _, outcome = self._evaluate(walks)
+        driven = self._driven(data)
+
+        assert driven in self._stuck_at(outcome)
+        finding = next(f for f in outcome.findings if f.startswith(driven))
+        assert "has not changed" in finding
+        assert "should vary" in finding
+
+    def test_freezing_one_sensor_changed_exactly_one_verdict(self):
+        """The experiment's whole value is that nothing else moved with it. A
+        detector that reacted to the extra walks in general, rather than to this
+        sensor stopping, would widen the set."""
+        data = self._fixture()
+        _, before = self._evaluate(self._walks(data, data["phase_a_walks"]))
+        _, after = self._evaluate(self._walks(data, data["walks"]))
+        assert self._stuck_at(after) - self._stuck_at(before) == {self._driven(data)}
+        assert self._stuck_at(before) - self._stuck_at(after) == set()
+
+    def test_the_verdict_is_about_the_window_not_the_lifetime(self):
+        """The driven sensor is NOT constant across the 28 walks -- it moved for the
+        first twelve -- yet it is flagged. That is correct and worth pinning: the
+        detector answers whether a reading has stopped moving lately, so comparing
+        it against a lifetime-constant set is the wrong oracle here, and the finding
+        says so itself by naming the window it counted over.
+        """
+        data = self._fixture()
+        walks = self._walks(data, data["walks"])
+        _, outcome = self._evaluate(walks)
+        driven = self._driven(data)
+
+        assert driven not in self._constant(walks)
+        assert driven in self._stuck_at(outcome)
+        assert "in window" in next(f for f in outcome.findings
+                                   if f.startswith(driven))
