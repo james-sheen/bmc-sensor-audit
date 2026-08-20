@@ -34,9 +34,15 @@ band.
 
 > **If you got here by grepping for `neg`, this is the answer: it is gone.** Every
 > match in this file is prose *about* the removal, and a word-level grep counts the
-> explanation as if it were the thing. The symbol to search for is **`READING_LOW`**,
-> which is absent from the whole package, and the property is pinned by
-> `test_no_mirrored_indicator_survives_anywhere` rather than left to a grep.
+> explanation as if it were the thing.
+>
+> The symbol the mechanism actually used was **`READING_LOW`**. Grep that instead
+> and you get exactly one hit: this sentence. That is deliberate — nought hits
+> would be ambiguous between *retired* and *you mistyped it* — and it is enforced,
+> because the first draft of this paragraph claimed the symbol was absent from the
+> package while being the reason it was not. `test_the_retired_symbol_survives_only_here`
+> asserts that no CODE uses it, docstrings excluded, which is the claim that
+> actually matters.
 
 **Levels beyond warning and critical are recorded, not folded.** entity-manager
 declares `hard_shutdown` and `non_recoverable` as well; the engine has two slots.

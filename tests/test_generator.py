@@ -397,3 +397,76 @@ class TestGeneratedOutputIsSubjectToTheHygieneRules:
         hits = hygiene_check.scan([Path("generated.yaml")], tmp_path,
                                   rules=hygiene_check.RULES)
         assert [h[2].name for h in hits] == ["redfish_inventory_field"]
+
+
+class TestTheRetiredMechanismLeavesOnlyItsExplanation:
+    """A negative claim that was false because of the sentence making it.
+
+    The generator's docstring tells a reviewer to grep `READING_LOW` rather than
+    `neg`, because a word-level grep counts prose about a removal as an instance of
+    the thing removed -- four consecutive reviews reported the transform as still
+    present on exactly that evidence.
+
+    The first draft of that advice said the symbol was "absent from the whole
+    package", and naming it made that false: the sentence became the only
+    occurrence. So the claim under test is not *the symbol never appears*, which is
+    unmaintainable, but the one that matters -- **no code uses it**.
+
+    Docstrings are stripped before asserting, which is the same discipline a
+    `literal not in source` assertion has needed here before.
+    """
+
+    @staticmethod
+    def _source_without_docstrings(path):
+        """The module's text with every docstring removed.
+
+        Walks the AST rather than pattern-matching quotes: a regex for triple-quoted
+        blocks is defeated by nested quotes and by a string that merely looks like a
+        docstring, and this assertion is only worth making if it is exact.
+        """
+        import ast
+        text = path.read_text()
+        tree = ast.parse(text)
+        spans = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                     ast.AsyncFunctionDef)):
+                continue
+            body = getattr(node, "body", None)
+            if not body:
+                continue
+            first = body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                spans.append((first.lineno, first.end_lineno))
+        lines = text.splitlines()
+        kept = [line for number, line in enumerate(lines, start=1)
+                if not any(start <= number <= end for start, end in spans)]
+        return "\n".join(kept)
+
+    def test_no_code_uses_the_retired_symbol(self):
+        src = ROOT / "src" / "bmc_sensor_audit"
+        offenders = []
+        for path in sorted(src.rglob("*.py")):
+            if "READING_LOW" in self._source_without_docstrings(path):
+                offenders.append(str(path.relative_to(ROOT)))
+        assert offenders == [], (
+            f"{offenders} use READING_LOW outside a docstring; the mirrored "
+            f"indicator was retired and nothing should reference it")
+
+    def test_the_retired_symbol_survives_only_here(self):
+        """One hit, in the paragraph that explains it. Nought would be ambiguous
+        between *retired* and *you mistyped the symbol*."""
+        src = ROOT / "src" / "bmc_sensor_audit"
+        hits = {str(p.relative_to(ROOT)): p.read_text().count("READING_LOW")
+                for p in sorted(src.rglob("*.py")) if "READING_LOW" in p.read_text()}
+        assert hits == {"src/bmc_sensor_audit/detect/generator.py": 1}, hits
+
+    def test_the_docstring_stripper_actually_strips(self):
+        """Non-vacuity. A stripper that returned the whole file would make the
+        assertion above pass by never removing anything, and a stripper that
+        returned nothing would make it pass by having nothing to find."""
+        path = ROOT / "src" / "bmc_sensor_audit" / "detect" / "generator.py"
+        stripped = self._source_without_docstrings(path)
+        assert "If you got here by grepping" not in stripped, "nothing was stripped"
+        assert "def generate(" in stripped, "the stripper removed code as well"
