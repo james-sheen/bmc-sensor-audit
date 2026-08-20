@@ -83,34 +83,30 @@ jobs:
           echo "  detect exited ${DETECT_STATUS} (1 is expected: the capture carries real findings)"
 
           # An empty or shapeless artifact uploads exactly as well as a good one, and
-          # nobody opens it until the day they need it. So it is inspected here.
-          python3 - <<'CHECK'
+          # nobody opens it until the day they need it. So it is inspected here --
+          # by the SHIPPED validator, not by a copy of the rules living in this file.
+          # A rule that exists only inside a `run:` block cannot be called by the
+          # person who receives the artifact, which is the one person who needs it.
+          PYTHONPATH=src python3 -m bmc_sensor_audit.cli validate-attestation attestation.json
+
+          # Separate on purpose. The validator checks the FORMAT, and a genuinely
+          # clean board legitimately produces an artifact with no findings -- so
+          # `findings is non-empty` must never be a format rule or a clean run would
+          # fail validation. What follows is an expectation about THIS FIXTURE: the
+          # vendored capture has always carried real findings and real declines, and
+          # if it stops, the pipeline broke rather than the board healed.
+          python3 - <<'FIXTURE'
           import json, sys
           a = json.load(open("attestation.json"))
-          if a.get("format") != "bmc-sensor-audit/attestation/1":
-              sys.exit(f"unexpected artifact format: {a.get('format')!r}")
-          for key in ("findings", "not_checked", "evidence"):
-              if not isinstance(a.get(key), list):
-                  sys.exit(f"artifact has no {key!r} list")
           if not a["findings"]:
-              sys.exit("the attestation records no findings; the vendored capture "
-                       "has always produced some, so either the artifact is empty "
-                       "or the pipeline stopped feeding the engine")
-          if len(a["evidence"]) != len(a["findings"]):
-              sys.exit(f"{len(a['findings'])} findings but {len(a['evidence'])} "
-                       f"evidence entries; a finding without its measurement is the "
-                       f"thing this artifact exists to carry")
+              sys.exit("the vendored capture produced no findings; it always has, so "
+                       "the pipeline stopped feeding the engine")
           if not a["not_checked"]:
-              sys.exit("the attestation records nothing as declined. An artifact "
-                       "listing only findings reads as a clean bill of health for "
-                       "every question nobody managed to ask")
-          if not a.get("engine", {}).get("boundary"):
-              sys.exit("the engine's own boundary statement is missing; the artifact "
-                       "must not claim more than the engine says it can support")
-          print(f"  {len(a['findings'])} finding(s), {len(a['not_checked'])} declined, "
-                f"{len(a['evidence'])} with measurements")
-          print(f"  boundary: {a['engine']['boundary']}")
-          CHECK
+              sys.exit("the vendored capture produced no declines; every run so far "
+                       "has warmed up on a single walk")
+          print(f"  fixture expectations hold: {len(a['findings'])} finding(s), "
+                f"{len(a['not_checked'])} declined")
+          FIXTURE
 
       - name: Keep it, so a later run has something to compare against
         uses: actions/upload-artifact@v4

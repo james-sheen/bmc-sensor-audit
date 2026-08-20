@@ -34,7 +34,7 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 334 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 358 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
@@ -88,6 +88,17 @@ Coverage plus liveness in one run, once the optional extra is installed:
 ```
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli detect --config <configs> --walk before.json --walk after.json
 ```
+
+`detect --attest-out FILE` writes a per-run record of what was checked, what was
+declined, and the measurement behind each finding. Anyone can check one — no
+engine and no hardware, because an artifact is just JSON:
+
+```
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli validate-attestation attestation.json
+```
+
+The format is documented in
+[`docs/attestation-format.md`](docs/attestation-format.md).
 
 Or install it and use the console script, which needs no `PYTHONPATH`:
 

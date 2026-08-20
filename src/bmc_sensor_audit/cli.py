@@ -285,6 +285,45 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     return max(stage1, outcome.exit_code, unreadable_floor, schema_floor)
 
 
+def _cmd_validate_attestation(args: argparse.Namespace) -> int:
+    """Check an attestation artifact against the format it declares.
+
+    Needs no engine and no hardware: an artifact is JSON, so the person who
+    RECEIVES one can run this over a file somebody sent them. That is the point of
+    the command existing rather than the rule living inside a CI workflow where only
+    the producer can reach it.
+    """
+    from .detect.attestation import validate_attestation
+
+    try:
+        artifact = json.loads(Path(args.path).read_text())
+    except OSError as error:
+        print(f"cannot read {args.path}: {error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    except json.JSONDecodeError as error:
+        print(f"{args.path} is not parseable as JSON: {error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    problems = validate_attestation(artifact)
+    if problems:
+        print(f"{args.path}: {len(problems)} problem(s)", file=sys.stderr)
+        for problem in problems:
+            print(f"    {problem}", file=sys.stderr)
+        return EXIT_REGRESSION
+
+    findings = len(artifact.get("findings") or [])
+    declined = len(artifact.get("not_checked") or [])
+    print(f"{args.path}: valid {artifact['format']}")
+    print(f"  {findings} finding(s), {declined} declined, "
+          f"{len(artifact.get('evidence') or [])} with measurements")
+    # Printed because a reader's next question is what the judgment rests on, and
+    # because an artifact that validates still carries the engine's own limit.
+    print(f"  judged under envelope schema_version "
+          f"{artifact['engine'].get('schema_version')}")
+    print(f"  boundary: {artifact['engine']['boundary']}")
+    return EXIT_CLEAN
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bmc-sensor-audit",
@@ -342,6 +381,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="write a per-run record of what was checked, what was "
                              "declined, and the measurements behind each finding")
     detect.set_defaults(func=_cmd_detect)
+
+    validate = subparsers.add_parser(
+        "validate-attestation",
+        help="check an attestation artifact against the format it declares")
+    validate.add_argument("path", help="the attestation JSON to check")
+    validate.set_defaults(func=_cmd_validate_attestation)
 
     capture = subparsers.add_parser(
         "capture", help="record a walk to disk, for a before/after gate")

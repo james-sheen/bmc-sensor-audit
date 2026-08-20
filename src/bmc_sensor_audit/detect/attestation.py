@@ -35,9 +35,95 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["build_attestation", "ATTESTATION_FORMAT"]
+__all__ = ["build_attestation", "validate_attestation", "ATTESTATION_FORMAT"]
 
 ATTESTATION_FORMAT = "bmc-sensor-audit/attestation/1"
+
+
+def validate_attestation(artifact: Any) -> list[str]:
+    """Everything wrong with this artifact, or an empty list.
+
+    **This lived inline in a CI workflow, and that was the defect rather than an
+    inconvenience.** Checking logic that exists only inside a `run:` block cannot be
+    called by the person who receives the artifact, cannot be tested, and cannot be
+    versioned alongside the thing it checks. A compliance reader was expected to
+    trust a shape they had no way to verify.
+
+    So the rule it enforces ships, the canary calls it, and a recipient can run the
+    same check over an artifact somebody sent them. One validator, two callers.
+
+    Returns problems rather than raising, so a caller reports all of them at once
+    instead of fixing them one run at a time.
+
+    **Deliberately does not import the engine.** An artifact is JSON, and validating
+    one is a Stage 1 operation: a recipient auditing a file should not have to
+    install a detection engine to read it.
+    """
+    problems: list[str] = []
+    if not isinstance(artifact, dict):
+        return [f"the artifact is {type(artifact).__name__}, not an object"]
+
+    declared = artifact.get("format")
+    if declared != ATTESTATION_FORMAT:
+        problems.append(f"format is {declared!r}, this build reads "
+                        f"{ATTESTATION_FORMAT!r}")
+
+    shape: list[str] = []
+    for key in ("findings", "not_checked", "evidence"):
+        if not isinstance(artifact.get(key), list):
+            shape.append(f"{key!r} is missing or is not a list")
+    if shape:
+        # Everything below indexes into these lists, so reporting a type error and
+        # then every consequence of it names one fault four times.
+        #
+        # Tracked separately from `problems` on purpose: returning early whenever
+        # ANY problem existed meant a wrong `format` -- the first check -- masked
+        # every other one, so a file could be fixed and re-run repeatedly, learning
+        # one fault at a time.
+        return problems + shape
+
+    if len(artifact["evidence"]) != len(artifact["findings"]):
+        problems.append(
+            f"{len(artifact['findings'])} finding(s) but "
+            f"{len(artifact['evidence'])} evidence entr(ies); a finding without its "
+            f"measurement is the thing this artifact exists to carry")
+
+    for index, entry in enumerate(artifact["evidence"]):
+        if not isinstance(entry, dict) or not isinstance(
+                entry.get("measurement"), dict) or not entry["measurement"]:
+            problems.append(f"evidence[{index}] carries no measurement")
+
+    engine = artifact.get("engine")
+    if not isinstance(engine, dict):
+        problems.append("the 'engine' block is missing")
+    else:
+        # **Required only when there IS evidence to bound.** The boundary is the
+        # engine's statement about what its evidence establishes, and it is read off
+        # the evidence entries themselves -- so a clean board, which produces no
+        # findings and therefore no evidence, has no boundary to carry and is not
+        # defective for lacking one.
+        #
+        # Requiring it unconditionally made this validator reject a healthy machine,
+        # which is the exact inversion the rest of this file is written to prevent.
+        # Found by the clean-board test rather than by reading.
+        if artifact["evidence"] and not engine.get("boundary"):
+            problems.append(
+                "the engine's own boundary statement is absent while evidence is "
+                "present; the artifact must not claim more than the engine says it "
+                "can support")
+        if engine.get("schema_version") is None:
+            problems.append(
+                "engine.schema_version is absent; without it the artifact does not "
+                "record which envelope contract the judgment was made under")
+
+    for key in ("unattested", "unread_feeds"):
+        if not isinstance(artifact.get(key), list):
+            problems.append(
+                f"{key!r} is missing or is not a list; it is how this artifact "
+                f"accounts for what was NOT part of the judgment, and an absent "
+                f"list reads as 'nothing was left out'")
+
+    return problems
 
 
 def build_attestation(session: Any, envelope: dict, describe: dict,
