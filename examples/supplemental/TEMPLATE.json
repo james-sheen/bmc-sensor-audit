@@ -1,0 +1,27 @@
+{
+  "format": "bmc-sensor-audit/supplemental/1",
+  "provenance": "TEMPLATE -- states nothing about any board. Copy it, replace every REPLACE_ME name with a sensor name your configuration actually declares, and replace every basis with what establishes the claim on YOUR hardware. Then put your own sentence here saying who established these and how. The names below are placeholders on purpose: they match no declaration, so a run against this file unedited stops and names them rather than checking nothing and passing.",
+  "redundant_groups": [
+    {
+      "sensors": ["REPLACE_ME_FAN_A_TACH", "REPLACE_ME_FAN_B_TACH"],
+      "tolerance": 0.1,
+      "basis": "REPLACE_ME -- what makes these the same measurement. A schematic revision and sheet showing the two tachometers on one rotor pair is the shape of answer that belongs here. What does NOT belong: that the names look alike, that the thresholds match, or that the part exposes two channels. A TMP421's two channels are its own die and an external diode and differ by tens of degrees on a working board; six SLED sensors in the vendored corpus carry four identical thresholds and sit on six different parts. Both of those pairings look right and are wrong, and a wrong pairing reports disagreement between two things that were never the same measurement -- a false positive that looks exactly like the feature working."
+    }
+  ],
+  "counters": [
+    {
+      "sensor": "REPLACE_ME_POWER_ON_HOURS",
+      "direction": "increasing",
+      "allow_reset": true,
+      "basis": "REPLACE_ME -- what makes this reading cumulative rather than instantaneous. allow_reset says whether the counter returns to zero on a power cycle or a firmware update; if it does and this says otherwise, every reset is reported as the counter going backwards."
+    }
+  ],
+  "flows": [
+    {
+      "input": "REPLACE_ME_PSU0_PIN",
+      "outputs": ["REPLACE_ME_PSU0_POUT"],
+      "loss_margin": 0.1,
+      "basis": "REPLACE_ME -- what makes the outputs the same power as the input, minus conversion loss. Both readings must belong to ONE device: a flow across two supplies asserts that power entering one leaves the other. loss_margin is a FRACTION of the input, so 0.1 tolerates losing a tenth of it, and the number is the supply's efficiency figure off its datasheet. Delete the line if you do not have that figure -- but know that the engine then applies its own default, which is a number nobody here chose."
+    }
+  ]
+}

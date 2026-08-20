@@ -104,6 +104,29 @@ jobs:
           bmc-sensor-audit declare --config board.json | tee out.txt
           grep -q "sensors declared" out.txt
 
+      - name: A real wheel, from a directory with no checkout
+        # The editable install above cannot see this class of defect. `pip install
+        # -e .` resolves the package back to the source tree, so a data file the
+        # wheel fails to include still loads from the checkout and every check
+        # passes -- while the artifact a user actually installs raises on first
+        # use. The package now ships `redfish_properties.json`, which is the
+        # standard property set `--strict-fields` judges against and the first
+        # non-Python file this project depends on at runtime.
+        #
+        # So: build the wheel, install THAT into a fresh environment, and run the
+        # command that needs the data file, from outside the tree.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet build
+          python3 -m build --wheel --outdir "$RUNNER_TEMP/dist"
+          python3 -m venv "$RUNNER_TEMP/consumer"
+          "$RUNNER_TEMP/consumer/bin/pip" install --quiet "$RUNNER_TEMP"/dist/*.whl
+          mkdir -p "$RUNNER_TEMP/wheeltest" && cd "$RUNNER_TEMP/wheeltest"
+          printf '%s' '{"format":"bmc-sensor-audit/walk/1","fields_observed":true,"sensors":[{"name":"Inlet","path":"/redfish/v1/Chassis/1/Sensors/s0","reading":21.0,"units":"Cel","resource":"Sensor","undeclared":["ThermalZone"],"thresholds":{}}]}' > walk.json
+          printf '%s' '{"Name":"Board","Exposes":[{"Name":"Inlet","Type":"TMP75"}]}' > board.json
+          "$RUNNER_TEMP/consumer/bin/bmc-sensor-audit" coverage --config board.json --walk walk.json --strict-fields | tee out.txt
+          grep -q "ThermalZone" out.txt
+
       - name: The documented module path, from a directory with no checkout
         # The first path the README prints. Run from outside the tree so a stray
         # working-directory import cannot make it pass by accident.

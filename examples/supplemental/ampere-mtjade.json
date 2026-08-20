@@ -1,0 +1,16 @@
+{
+  "format": "bmc-sensor-audit/supplemental/1",
+  "provenance": "Worked example for the Ampere Mt.Jade configuration vendored at tests/fixtures/upstream/ampere/mtjade.json. Every entry below is established by that file plus the PMBus command set the labels name. NOTHING HERE IS A SCHEMATIC CLAIM: no redundant group and no counter is declared, because neither can be established from a configuration file and this example holds only what can. An ODM holding the board schematic is the party that can add them -- see TEMPLATE.json.",
+  "flows": [
+    {
+      "input": "PSU0_PINPUT",
+      "outputs": ["PSU0_POUTPUT"],
+      "basis": "Both readings are declared by the same PSU entry in mtjade.json under the pmbus labels pin and pout1, which name the PMBus READ_PIN and READ_POUT commands: input power to the supply and output power from the same supply. The claim is therefore about one device, not two, which is what makes it derivable here at all. NO loss_margin is declared: the acceptable conversion loss is the supply's efficiency figure, that number is on the PSU datasheet, and this file does not have it."
+    },
+    {
+      "input": "PSU1_PINPUT",
+      "outputs": ["PSU1_POUTPUT"],
+      "basis": "As PSU0, on the second supply declared by the same file. Stated separately rather than as one group of four: PSU0 and PSU1 are two devices, and a flow that mixed them would assert that power entering one supply leaves the other."
+    }
+  ]
+}

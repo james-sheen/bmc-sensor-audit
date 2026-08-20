@@ -31,10 +31,23 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
+from . import redfish_schema
+
 __all__ = ["LiveSensor", "Walk", "RedfishClient", "walk_chassis", "read_sensor_object",
-           "walk_from_dict", "order_walks", "WALK_FORMAT"]
+           "walk_from_dict", "order_walks", "WALK_FORMAT", "LEGACY_RESOURCES"]
 
 WALK_FORMAT = "bmc-sensor-audit/walk/1"
+
+# Which schema type each deprecated-tree array holds. The arrays are the walker's
+# read surface for `Thermal` and `Power`, and every one of them is a different
+# resource type with a different property set -- `Fan` declares thirty-two
+# properties and `Voltage` nineteen, so judging both against one merged set would
+# report standard `Fan` properties as drift on every machine with a fan in it.
+LEGACY_RESOURCES = {
+    "Temperatures": "Temperature", "Fans": "Fan",
+    "Voltages": "Voltage", "PowerSupplies": "PowerSupply",
+    "PowerControl": "PowerControl",
+}
 
 # Redfish reports a reading and the four thresholds as nested objects on the
 # modern schema, and as flat siblings on the deprecated one. Both are read.
@@ -70,6 +83,12 @@ class LiveSensor:
     health: str | None = None            # Status.Health
     thresholds: dict[tuple[str, str], float] = field(default_factory=dict)
     source_shape: str = "sensors"        # "sensors" | "thermal" | "power"
+    # Property NAMES this object carried that the published schema for its resource
+    # type does not declare. Names only, never values: a Redfish sensor object can
+    # carry `SerialNumber` and `PartNumber`, and a report that quoted what it found
+    # would publish the machine's identity while complaining about the field.
+    undeclared: tuple[str, ...] = ()
+    resource: str = "Sensor"             # the Redfish schema type it was read as
 
     @property
     def is_enabled(self) -> bool:
@@ -107,6 +126,14 @@ class Walk:
     # this field existed, which is a different fact from a walk taken at an unknown
     # time -- see `order_walks`, which refuses to guess for either.
     captured_at: str | None = None
+    # Whether the properties of each sensor object were compared against the schema
+    # at walk time. False for a capture written before that existed -- and the
+    # distinction is the whole point of the flag. `capture` writes the PARSED sensor
+    # set, so an old capture carries no record of which properties the object had;
+    # every sensor in it reports no undeclared properties, and a strictness report
+    # over one would print a clean board on evidence it does not have. That is the
+    # vacuous pass this project keeps finding in other people's systems.
+    fields_observed: bool = False
 
     @property
     def complete(self) -> bool:
@@ -145,11 +172,17 @@ class Walk:
             "shapes_seen": sorted(self.shapes_seen),
             "errors": [list(e) for e in self.errors],
             "captured_at": self.captured_at,
+            "fields_observed": self.fields_observed,
             "latencies": [[p, round(t, 6)] for p, t in self.latencies],
             "sensors": [
                 {"name": s.name, "path": s.path, "reading": s.reading,
                  "units": s.units, "state": s.state, "health": s.health,
-                 "shape": s.source_shape,
+                 "shape": s.source_shape, "resource": s.resource,
+                 # Written only when there is something to say. The walk-level
+                 # `fields_observed` flag is what distinguishes "nothing
+                 # undeclared" from "nobody looked", so the per-sensor key does
+                 # not have to carry an empty list to stay honest.
+                 **({"undeclared": list(s.undeclared)} if s.undeclared else {}),
                  "thresholds": {f"{b}/{lv}": v for (b, lv), v in sorted(s.thresholds.items())}}
                 for s in self.sensors
             ],
@@ -220,12 +253,18 @@ def _link(payload: dict[str, Any], key: str) -> str | None:
     return None
 
 
-def read_sensor_object(obj: dict[str, Any], path: str, shape: str = "sensors") -> LiveSensor:
+def read_sensor_object(obj: dict[str, Any], path: str, shape: str = "sensors",
+                       resource: str = "Sensor") -> LiveSensor:
     """Turn one Redfish object into a LiveSensor, from either schema generation.
 
     `Reading` is taken as absent rather than zero when missing or null. That
     distinction is the entire product: a sensor reporting 0 and a sensor
     reporting nothing are different facts, and collapsing them loses the finding.
+
+    `resource` names the Redfish schema type the object was read as, which decides
+    which property set it is judged against. `shape` says which TREE it came from
+    and cannot answer that: `thermal` covers both `Temperature` and `Fan`, and
+    those two schemas declare different properties.
     """
     status = obj.get("Status") if isinstance(obj.get("Status"), dict) else {}
     thresholds: dict[tuple[str, str], float] = {}
@@ -258,7 +297,8 @@ def read_sensor_object(obj: dict[str, Any], path: str, shape: str = "sensors") -
         units=obj.get("ReadingUnits") or obj.get("ReadingType"),
         state=(status.get("State") if isinstance(status.get("State"), str) else None),
         health=(status.get("Health") if isinstance(status.get("Health"), str) else None),
-        thresholds=thresholds, source_shape=shape)
+        thresholds=thresholds, source_shape=shape, resource=resource,
+        undeclared=redfish_schema.undeclared_properties(obj, resource))
 
 
 def walk_chassis(client: RedfishClient) -> Walk:
@@ -301,6 +341,11 @@ def walk_chassis(client: RedfishClient) -> Walk:
 
     _merge_shapes(walk)
     walk.latencies = list(client.latencies)
+    # Set here and nowhere else: every object this walk parsed went through
+    # `read_sensor_object`, which compares against the schema unconditionally. The
+    # flag records that the comparison HAPPENED, so an empty result downstream
+    # means the machine carried nothing undeclared rather than that nobody looked.
+    walk.fields_observed = True
     # Stamped where the walk is TAKEN, never in `to_dict`. Serialising is not
     # observing: a walk rehydrated from a year-old capture and written back out
     # would otherwise claim to have been taken today, which is the one thing a
@@ -350,7 +395,8 @@ def _walk_sensor_collection(client: RedfishClient, path: str, walk: Walk) -> Non
     for member_path in _members(collection):
         try:
             walk.sensors.append(
-                read_sensor_object(client.get(member_path), member_path, "sensors"))
+                read_sensor_object(client.get(member_path), member_path, "sensors",
+                                   "Sensor"))
         except Exception as exc:  # noqa: BLE001
             walk.errors.append((member_path, str(exc)))
 
@@ -367,7 +413,8 @@ def _walk_legacy(client: RedfishClient, path: str, walk: Walk, shape: str) -> No
         for index, obj in enumerate(payload.get(array) or []):
             if isinstance(obj, dict):
                 walk.sensors.append(
-                    read_sensor_object(obj, f"{path}#/{array}/{index}", shape))
+                    read_sensor_object(obj, f"{path}#/{array}/{index}", shape,
+                                       LEGACY_RESOURCES[array]))
 
     if shape == "power":
         # `PowerControl` is where the deprecated schema puts chassis draw, and
@@ -387,7 +434,8 @@ def _walk_legacy(client: RedfishClient, path: str, walk: Walk, shape: str) -> No
         for index, obj in enumerate(payload.get("PowerControl") or []):
             if not isinstance(obj, dict):
                 continue
-            sensor = read_sensor_object(obj, f"{path}#/PowerControl/{index}", shape)
+            sensor = read_sensor_object(obj, f"{path}#/PowerControl/{index}", shape,
+                                        LEGACY_RESOURCES["PowerControl"])
             if sensor.reading is None:
                 continue
             walk.sensors.append(sensor)
@@ -460,6 +508,10 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
     walk.shapes_seen = set(payload.get("shapes_seen", ()))
 
     if payload.get("format") == WALK_FORMAT:
+        # Absent means the capture predates field observation, so it stays False.
+        # Defaulting it to True would make every capture ever written claim its
+        # sensors carried no undeclared properties, on no evidence at all.
+        walk.fields_observed = bool(payload.get("fields_observed", False))
         for item in payload.get("sensors", ()):
             thresholds: dict[tuple[str, str], float] = {}
             for slot, value in (item.get("thresholds") or {}).items():
@@ -470,11 +522,23 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
                 name=item["name"], path=item.get("path", item["name"]),
                 reading=item.get("reading"), units=item.get("units"),
                 state=item.get("state"), health=item.get("health"),
-                thresholds=thresholds, source_shape=item.get("shape", "sensors")))
+                thresholds=thresholds, source_shape=item.get("shape", "sensors"),
+                resource=str(item.get("resource", "Sensor")),
+                undeclared=tuple(item.get("undeclared") or ())))
         return walk
 
+    # A raw dump still carries the objects themselves, so the comparison can be
+    # made now rather than at walk time. `_shape` and `_resource` are this
+    # project's own markers on a hand-assembled fixture; a genuine Redfish dump
+    # carries neither, and `Sensor` is the collection everything modern lives in.
+    walk.fields_observed = True
     for item in payload.get("sensors", ()):
+        # The markers are removed before the object is judged. Leaving them in
+        # would make every hand-assembled fixture report `_shape` as a property
+        # the standard does not declare -- a finding this project invented and
+        # then found.
+        obj = {k: v for k, v in item.items() if not k.startswith("_")}
         walk.sensors.append(read_sensor_object(
-            item, item.get("@odata.id") or item.get("path") or str(item.get("Name", "?")),
-            item.get("_shape", "sensors")))
+            obj, item.get("@odata.id") or item.get("path") or str(item.get("Name", "?")),
+            item.get("_shape", "sensors"), item.get("_resource", "Sensor")))
     return walk

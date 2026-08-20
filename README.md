@@ -43,10 +43,12 @@ does gate the tag, it belongs in this paragraph.
 | Redfish walk | working — both tree shapes, standard library only |
 | Coverage diff | working — three-way classification, thresholds, reverse direction |
 | Walk capture | working — `capture` writes a walk for a before/after gate |
+| Firmware regression gate | working — `regression` diffs two captures: removed, renamed, re-thresholded |
+| Field strictness | working — `coverage --strict-fields`, against property sets derived from DMTF's schemas |
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 369 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 425 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
@@ -93,6 +95,13 @@ PYTHONPATH=src python3 -m bmc_sensor_audit.cli declare --config <entity-manager-
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --target https://<bmc> --insecure
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli capture  --target https://<bmc> --out before.json
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --walk before.json --json
+```
+
+Two captures of one machine, across a firmware change — see
+[the regression gate](#the-firmware-regression-gate) below:
+
+```
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli regression --before before.json --after after.json
 ```
 
 Coverage plus liveness in one run, once the optional extra is installed:
@@ -208,6 +217,68 @@ silently corrupts a naive implementation:
   unrecognised is reported rather than discarded: a closed enum with a missing
   member misclassifies confidently instead of failing.
 
+## The firmware regression gate
+
+The question a flashing station asks: **which sensors did this firmware update
+remove, rename, or re-threshold?** Capture before the flash, capture after, and
+compare the two captures directly.
+
+```
+bmc-sensor-audit capture --target https://<bmc> --insecure --out before.json
+# flash the new firmware, let the BMC come back up
+bmc-sensor-audit capture --target https://<bmc> --insecure --out after.json
+bmc-sensor-audit regression --before before.json --after after.json
+```
+
+Exit `0` clean, `1` something got worse, `2` a walk did not complete. It needs no
+configuration and no route back to the machine: two files and a diff, which is
+what the station has by the time anyone looks.
+
+**This is not the coverage diff run twice, and the difference is the point.** A
+firmware that renames `FAN0_TACH_IL` to `FAN0 TACH IL` still matches the
+declaration — the normalised matcher exists to tolerate exactly that spelling
+difference — so both coverage runs come back with the same exit code and the same
+regressions, while every dashboard, alert rule and trend query keyed on the old
+string goes quiet. Measured, in `tests/test_regression_gate.py`.
+
+What fails the gate: a sensor no longer reported, a sensor renamed, a reading lost
+while the sensor still reports as enabled, a sensor switched off, a threshold that
+moved or vanished, and units that changed under a stable name. What is reported
+without failing it: sensors added, thresholds added, a sensor switched back on,
+and new properties outside the schema.
+
+**A rename is only claimed where the URI stayed the same, and the URI alone is not
+enough.** Some firmware numbers sensors positionally, so inserting one shifts
+every URI after it — pairing on URI alone reported two confident renames on a
+firmware that had renamed nothing. So the units and resource type have to agree
+too. Where a name and a URI both changed, the report shows one removal and one
+addition and says so: nothing in two walks settles which addition replaced which
+removal, and a wrong guess reads exactly like a right one.
+
+**Field strictness.** `coverage --strict-fields` names the properties a sensor
+object carries that the published Redfish schema does not declare — the early
+warning that a firmware's output is wandering from what downstream monitoring
+parses. The property set is *derived* from DMTF's own schemas by
+`tools/derive_redfish_properties.py`, which records the version and SHA-256 of
+each document it read; a hand-written list would turn every name its author forgot
+into a confident accusation. Annotations are protocol metadata and are not
+reported, and neither is anything under `Oem` — that is the extension point the
+standard provides, and using it is not drift. Nothing here changes an exit code: a
+vendor extension is permitted, and a gate that failed on the first one would be
+switched off within a week. What the gate *does* catch is an undeclared property
+that **arrived**, which is a comparison between two firmware versions and is
+reported by `regression`.
+
+Real firmware carries none: the vendored OpenBMC 2.9.0 capture reports nothing
+undeclared across its six sensor objects. That is a small population and it is
+stated rather than generalised — what it establishes is that the check does not
+fire on ordinary firmware.
+
+**A capture written before this existed says so rather than passing.** `capture`
+records the parsed sensor set, so an older capture carries no evidence about any
+property, and a strictness report over one prints `NOT CHECKED` instead of a clean
+board. Nothing undeclared and nobody looked are different facts.
+
 ## Liveness (Stage 2)
 
 A sensor can be present, enabled, and reporting a perfectly plausible number that
@@ -243,6 +314,25 @@ tens of degrees on a working board; six SLED sensors on six different parts carr
 identical thresholds. So they come from an operator-declared file passed with
 `--supplemental`, each entry carrying a required `basis`. The generator lists
 multi-channel parts as *candidates* and asserts nothing about them.
+
+Two example files ship in [`examples/supplemental/`](examples/supplemental). One is
+**worked** — every entry in `ampere-mtjade.json` is established by the vendored
+configuration plus the PMBus commands its labels name, and it declares no
+redundant group and no counter, because neither can be established from a
+configuration file. The other is a **template**, and its placeholder names match
+nothing on purpose: a run against it unedited stops and names every line still to
+be filled in, rather than checking nothing and reporting agreement.
+
+**A number the file leaves out is one the engine chooses.** A redundant group with
+no `tolerance` and a flow with no `loss_margin` are still judged — against the
+engine's defaults, which from the report were indistinguishable from numbers an
+operator picked. `detect` now names them. That is the same argument the required
+`basis` makes, one level down: a check running against an unspecified threshold is
+a working check, not a specified one.
+
+**Burn-in.** How many walks a liveness run needs, why the station's interval is
+not in that arithmetic, and the window that silently caps it:
+[`docs/burn-in.md`](docs/burn-in.md).
 
 **A per-run record.** `--attest-out` writes what was checked, what was **declined**,
 and the measurement behind every finding — the reading, the threshold it crossed and

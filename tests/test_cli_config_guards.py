@@ -282,8 +282,14 @@ class TestTheNearMisses:
         assert result.returncode == 0, result.stderr
 
     def test_the_vendored_corpus_stays_quiet(self):
-        """A real corpus, not a fixture. If the guards fire on the nine upstream
-        configurations this repository vendors, they are wrong."""
+        """A real corpus, not a fixture. If the guards fire on the upstream
+        configurations this repository vendors, they are wrong.
+
+        The count is deliberately not stated here. It said *nine* while thirteen
+        were vendored -- a number written in a second place and left to drift,
+        which is the defect this project pins elsewhere. The population is the
+        directory, and the directory is what this reads.
+        """
         result = _declare(ROOT / "tests" / "fixtures" / "upstream")
         assert result.returncode == 0, result.stderr
 

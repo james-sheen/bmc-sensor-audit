@@ -39,6 +39,11 @@ class MockSensor:
     upper_warning: float | None = None
     lower_critical: float | None = None
     lower_warning: float | None = None
+    # Extra properties this sensor reports, merged into whichever shape is served.
+    # A firmware that invents properties is the thing `--strict-fields` exists to
+    # name, and it cannot be tested against a mock that can only serve the
+    # standard set -- the check would pass on every fixture and be untested.
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def as_modern(self, member_id: str) -> dict[str, Any]:
         """The current schema: thresholds nested, each with its own Reading."""
@@ -59,6 +64,7 @@ class MockSensor:
             obj["Reading"] = self.reading
         if thresholds:
             obj["Thresholds"] = thresholds
+        obj.update(self.extra)
         return obj
 
     def as_legacy(self) -> dict[str, Any]:
@@ -76,6 +82,7 @@ class MockSensor:
                            ("LowerThresholdNonCritical", self.lower_warning)):
             if value is not None:
                 obj[key] = value
+        obj.update(self.extra)
         return obj
 
 
