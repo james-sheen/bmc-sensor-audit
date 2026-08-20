@@ -30,7 +30,7 @@ Every key the builder writes today. *Stability* is the promise made within `/1`.
 | Key | Type | Meaning | Stability |
 |---|---|---|---|
 | `format` | string | `bmc-sensor-audit/attestation/1`. The contract this file claims. | Fixed; a change is a new major |
-| `target` | string | What was audited — a Redfish URL, or the path of the recorded walk. | Present, may be null for an unnamed source |
+| `target` | string | What was audited — a Redfish URL, or the path of the recorded walk. **May name an internal host; see the note below.** | Present, may be null for an unnamed source |
 | `engine.schema_version` | integer | The envelope contract the judgment was made **under**. This is the artifact's provenance chain into the engine, and it is not the engine's release number. | Present whenever the engine stamped one |
 | `engine.boundary` | string | **The engine's own statement of what its evidence does and does not establish**, quoted verbatim. | Present **whenever `evidence` is**; wording is the engine's, not ours |
 | `checked` | object | `{invariants, entities}` — the denominator. How many questions were asked, over how many things. | Keys may be added |
@@ -39,6 +39,30 @@ Every key the builder writes today. *Stability* is the promise made within `/1`.
 | `evidence` | array | The numbers. One per finding: `sensor`, `axiom`, `problem_type`, `confidence`, `boundary`, and `measurement` — the reading, the threshold it crossed, which side of the band, as the engine reported them. | One per finding; see the invariant below |
 | `unattested` | array | Problem types the engine declined to attest, each with its reason. Empty is the normal case. | Present, possibly empty |
 | `unread_feeds` | array | Observations that were fed and that nothing in the model read. | Present, possibly empty |
+
+## `target` leaves through a different door from everything else
+
+**An attestation is the first thing this project produces that is published
+without being committed.** The hygiene rules guard files on their way into the
+repository, and their founding case is exactly this class of problem: a Redfish
+walk of a real machine returns serials and asset tags, so `capture` writes only
+the parsed sensor set. That perimeter is drawn around commits.
+
+An artifact uploaded from CI is not a commit. `target: https://bmc-rack12.corp.internal`
+publishes an internal hostname into a channel no hook scans, and the field is
+populated by default with whatever `--target` was.
+
+Use `--attest-target-label` to substitute a site-neutral name:
+
+```
+detect --target https://bmc-rack12.corp.internal \
+       --attest-out attestation.json --attest-target-label rack12-node3
+```
+
+**Nothing here guesses which hostnames are internal.** Pattern-matching
+internality would be speculation dressed as a safety feature, and it would fail
+in both directions — flagging a public name and passing a private one. The
+operator knows; the tool provides the override and says why it exists.
 
 ## Three invariants, and they are contracts rather than coincidences
 

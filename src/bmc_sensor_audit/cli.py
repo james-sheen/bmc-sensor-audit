@@ -24,7 +24,8 @@ from pathlib import Path
 
 from .inventory.diff import compare
 from .inventory.entity_manager import load_declaration
-from .inventory.redfish import RedfishClient, Walk, walk_chassis, walk_from_dict
+from .inventory.redfish import (RedfishClient, Walk, order_walks, walk_chassis,
+                                walk_from_dict)
 from .report import as_json, as_text
 
 EXIT_CLEAN, EXIT_REGRESSION, EXIT_INCOMPLETE = 0, 1, 2
@@ -187,6 +188,12 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     # and one walk is one sample. A live target gives exactly one.
     if args.walk:
         walks = [_load_recorded_walk(path) for path in args.walk]
+        # The last walk supplies every current reading, so the order is not a
+        # presentation detail. A shell glob hands over lexical order, in which
+        # `walk10` precedes `walk9`.
+        walks, ordering = order_walks(walks)
+        if ordering:
+            print(f"\n{ordering}", file=sys.stderr)
         target = args.walk[-1]
     else:
         walks = [walk_chassis(_client(args))]
@@ -266,9 +273,16 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         from arbiter_engine.api import attest
 
         from .detect.attestation import build_attestation
+        # The artifact leaves through a different door from every committed file,
+        # and the hygiene perimeter guards commits. `target` is a Redfish URL by
+        # default, so an artifact uploaded from CI can publish an internal hostname
+        # in a channel no hook ever scans. The label is the operator's override; no
+        # guessing at which hostnames look internal happens here, because that is
+        # pattern-matching a judgement only they can make.
         Path(args.attest_out).write_text(json.dumps(
             build_attestation(session, envelope, described, manifest,
-                              target=target, attest_fn=attest), indent=2))
+                              target=args.attest_target_label or target,
+                              attest_fn=attest), indent=2))
     print(detect_as_text(outcome, feed_result))
 
     # Composed, not merged. The worse of the four wins, and `2` outranks `1` because
@@ -380,6 +394,10 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--attest-out",
                         help="write a per-run record of what was checked, what was "
                              "declined, and the measurements behind each finding")
+    detect.add_argument("--attest-target-label",
+                        help="what the artifact should call the target instead of "
+                             "its URL; a BMC hostname names an internal machine and "
+                             "an artifact uploaded from CI publishes it")
     detect.set_defaults(func=_cmd_detect)
 
     validate = subparsers.add_parser(

@@ -19,7 +19,7 @@ import pytest
 from bmc_sensor_audit.inventory.diff import compare
 from bmc_sensor_audit.inventory.entity_manager import parse_config_text
 from bmc_sensor_audit.inventory.redfish import (
-    RedfishClient, walk_chassis, walk_from_dict,
+    RedfishClient, order_walks, walk_chassis, walk_from_dict,
 )
 from bmc_sensor_audit.testing import MockBMC, serve
 
@@ -36,6 +36,9 @@ def _populated(shape: str) -> MockBMC:
 def _walk(bmc: MockBMC):
     with serve(bmc) as url:
         return walk_chassis(RedfishClient(url))
+
+
+_walk_obj = _walk
 
 
 DECLARATION = parse_config_text(json.dumps({
@@ -472,3 +475,77 @@ class TestWalkLatencyIsRecorded:
              / "tests" / "fixtures" / "walk_qemu_bletchley.json").read_text()))
         assert walk.latencies == []
         assert len(walk) == 28, "the capture itself should be unaffected"
+
+
+class TestWalksAreOrderedByWhenTheyWereTaken:
+    """The last walk supplies every current reading, so the order is not a
+    presentation detail.
+
+    Measured before this existed: two hundred captures passed as a shell glob
+    arrive in LEXICAL order -- `walk10` before `walk9` -- and the run reported a
+    reading of 108 where the newest capture said 209. It announced walk 99 as the
+    present state of the machine, and every bound verdict was judged against it.
+    """
+
+    def _walk(self, stamp):
+        walk = _walk_obj(_populated("sensors"))
+        walk.captured_at = stamp
+        return walk
+
+    def test_a_capture_records_when_it_was_taken(self):
+        walk = _walk_obj(_populated("sensors"))
+        assert walk.captured_at, "a live walk carries no capture time"
+        assert walk.captured_at.endswith("+00:00"), "the stamp is not UTC"
+
+    def test_the_stamp_survives_a_round_trip(self):
+        walk = _walk_obj(_populated("sensors"))
+        assert walk_from_dict(walk.to_dict()).captured_at == walk.captured_at
+
+    def test_reserialising_an_old_capture_does_not_restamp_it(self):
+        """Serialising is not observing. A walk rehydrated from a year-old capture
+        and written back out must not claim to have been taken today, which is the
+        one thing a timestamp exists to prevent."""
+        original = {"format": "bmc-sensor-audit/walk/1", "chassis": [],
+                    "shapes_seen": [], "errors": [], "sensors": [],
+                    "captured_at": "2020-01-01T00:00:00+00:00"}
+        assert walk_from_dict(original).to_dict()["captured_at"] == \
+            "2020-01-01T00:00:00+00:00"
+
+    def test_lexical_order_is_corrected_to_chronological(self):
+        walks = [self._walk("2026-01-01T00:0%d:00+00:00" % i) for i in (1, 9, 2)]
+        ordered, note = order_walks(walks)
+        assert [w.captured_at for w in ordered] == sorted(
+            w.captured_at for w in walks)
+        assert note and "reordered" in note
+
+    def test_an_order_that_was_already_right_says_nothing(self):
+        """A note on every run is a note nobody reads."""
+        walks = [self._walk("2026-01-01T00:0%d:00+00:00" % i) for i in (1, 2, 3)]
+        ordered, note = order_walks(walks)
+        assert note is None
+        assert ordered == walks
+
+    def test_walks_with_no_stamp_keep_their_order_and_say_so(self):
+        """Old captures predate the field, so this is a warning rather than a
+        refusal -- but silence would leave the caller believing the tool checked."""
+        walks = [self._walk(None), self._walk(None)]
+        ordered, note = order_walks(walks)
+        assert ordered == walks
+        assert note and "no capture time" in note
+
+    def test_a_partial_ordering_is_refused_rather_than_applied(self):
+        """A subset is never sorted. Putting the stamped walks in order and leaving
+        the rest where they fell produces a confident sequence that is wrong in an
+        unpredictable place."""
+        walks = [self._walk("2026-01-01T00:05:00+00:00"), self._walk(None),
+                 self._walk("2026-01-01T00:01:00+00:00")]
+        ordered, note = order_walks(walks)
+        assert ordered == walks, "a partial ordering was applied"
+        assert note and "not an ordering" in note
+
+    def test_a_single_walk_is_never_commented_on(self):
+        """One walk has no order to get wrong, and a warning there would be noise
+        on the most common invocation there is."""
+        walks = [self._walk(None)]
+        ordered, note = order_walks(walks)
+        assert ordered == walks and note is None

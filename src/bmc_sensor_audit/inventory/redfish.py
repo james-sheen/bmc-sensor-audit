@@ -25,13 +25,14 @@ import base64
 import json
 import ssl
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 __all__ = ["LiveSensor", "Walk", "RedfishClient", "walk_chassis", "read_sensor_object",
-           "walk_from_dict", "WALK_FORMAT"]
+           "walk_from_dict", "order_walks", "WALK_FORMAT"]
 
 WALK_FORMAT = "bmc-sensor-audit/walk/1"
 
@@ -102,6 +103,10 @@ class Walk:
     # taken before this was recorded -- absent and zero are different facts,
     # and a missing measurement must not read as an instant response.
     latencies: list[tuple[str, float]] = field(default_factory=list)
+    # When the walk was taken, UTC ISO 8601. `None` for a capture written before
+    # this field existed, which is a different fact from a walk taken at an unknown
+    # time -- see `order_walks`, which refuses to guess for either.
+    captured_at: str | None = None
 
     @property
     def complete(self) -> bool:
@@ -139,6 +144,7 @@ class Walk:
             "chassis": list(self.chassis),
             "shapes_seen": sorted(self.shapes_seen),
             "errors": [list(e) for e in self.errors],
+            "captured_at": self.captured_at,
             "latencies": [[p, round(t, 6)] for p, t in self.latencies],
             "sensors": [
                 {"name": s.name, "path": s.path, "reading": s.reading,
@@ -295,6 +301,11 @@ def walk_chassis(client: RedfishClient) -> Walk:
 
     _merge_shapes(walk)
     walk.latencies = list(client.latencies)
+    # Stamped where the walk is TAKEN, never in `to_dict`. Serialising is not
+    # observing: a walk rehydrated from a year-old capture and written back out
+    # would otherwise claim to have been taken today, which is the one thing a
+    # timestamp exists to prevent.
+    walk.captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return walk
 
 
@@ -382,6 +393,55 @@ def _walk_legacy(client: RedfishClient, path: str, walk: Walk, shape: str) -> No
             walk.sensors.append(sensor)
 
 
+def order_walks(walks: list[Walk]) -> tuple[list[Walk], str | None]:
+    """Put walks in the order they were taken, or say why that could not be done.
+
+    **Chronology was the caller's responsibility and nothing could check it.** The
+    feeder's contract is *oldest to newest*: the last report supplies every current
+    reading, and every bound verdict is judged against those. A shell glob supplies
+    LEXICAL order, in which `walk10.json` sorts before `walk9.json` -- so
+    `--walk walks/*.json` over two hundred captures reported walk 99 as the present
+    state of the machine. Measured, not hypothesised: the run announced a reading of
+    108 where the newest capture said 209.
+
+    That is worse than a stale number. Absence, liveness and every threshold
+    comparison are computed against whichever walk landed last in `argv`.
+
+    Returns `(ordered, note)`. The note is for the operator and is never silently
+    swallowed -- an input this function could not order is a condition to surface,
+    not one to survive.
+
+    **A subset is never sorted.** If some walks carry a timestamp and others do not,
+    there is no ordering over the whole set, and inventing one by putting the
+    stamped ones in order and leaving the rest where they fell would produce a
+    confident sequence that is wrong in an unpredictable place. Mixed input keeps
+    the caller's order and says so.
+    """
+    if len(walks) < 2:
+        return walks, None
+
+    stamped = [w for w in walks if w.captured_at]
+    if not stamped:
+        return walks, (
+            f"{len(walks)} walks carry no capture time, so their order is the one "
+            f"you supplied and nothing here can check it. A shell glob sorts "
+            f"lexically -- `walk10` before `walk9` -- and the LAST walk supplies "
+            f"every current reading. Re-capture to record the time, or pass them "
+            f"oldest first")
+    if len(stamped) != len(walks):
+        return walks, (
+            f"{len(stamped)} of {len(walks)} walks carry a capture time. A partial "
+            f"ordering is not an ordering, so the order you supplied was kept "
+            f"unchanged rather than guessed at")
+
+    ordered = sorted(walks, key=lambda w: w.captured_at or "")
+    if [id(w) for w in ordered] == [id(w) for w in walks]:
+        return ordered, None
+    return ordered, (
+        f"{len(walks)} walks reordered by capture time; the order supplied was not "
+        f"chronological, and the last walk supplies every current reading")
+
+
 def walk_from_dict(payload: dict[str, Any]) -> Walk:
     """Rehydrate a walk from `Walk.to_dict`, or from a raw Redfish dump.
 
@@ -394,6 +454,8 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
     walk.errors = [tuple(e) for e in payload.get("errors", ())]
     walk.latencies = [(str(p), float(t))
                       for p, t in payload.get("latencies", ())]
+    stamp = payload.get("captured_at")
+    walk.captured_at = str(stamp) if stamp else None
     walk.chassis = list(payload.get("chassis", ()))
     walk.shapes_seen = set(payload.get("shapes_seen", ()))
 
