@@ -32,6 +32,12 @@ the mirrored observations, the translation — is deleted rather than kept worki
 indicator per sensor now carries both bound pairs, and a sensor declaring both gets a
 band.
 
+> **If you got here by grepping for `neg`, this is the answer: it is gone.** Every
+> match in this file is prose *about* the removal, and a word-level grep counts the
+> explanation as if it were the thing. The symbol to search for is **`READING_LOW`**,
+> which is absent from the whole package, and the property is pinned by
+> `test_no_mirrored_indicator_survives_anywhere` rather than left to a grep.
+
 **Levels beyond warning and critical are recorded, not folded.** entity-manager
 declares `hard_shutdown` and `non_recoverable` as well; the engine has two slots.
 Folding a non-recoverable bound into `critical` would move the alarm point to a

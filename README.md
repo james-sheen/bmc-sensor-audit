@@ -25,6 +25,18 @@ diff between what that file declares and what the machine actually reports.
 against the full upstream configuration corpus. Not yet released, not yet
 installable from an index, and there is no tagged version.
 
+**On the missing tag, since silence about it would be the wrong lesson.** The
+work a release needs is done and under test: the community and citation files,
+the attestation format with a shipped validator, and the walk-ordering fix that
+made a run's idea of *now* verifiable. The one acceptance criterion still
+honestly open is a capture from **physical** hardware — described further down,
+and not the same thing as a release blocker. No other condition is recorded here.
+
+That last sentence is the point. *Not done yet* and *waiting for X* are different
+claims, and only the written one can be checked by a reader — which is the whole
+argument this tool makes about sensors, applied to its own status. If a condition
+does gate the tag, it belongs in this paragraph.
+
 | | |
 |---|---|
 | Declaration reader | working — 349/349 upstream configs parse at the pinned revision |
