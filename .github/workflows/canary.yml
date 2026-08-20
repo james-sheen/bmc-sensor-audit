@@ -58,6 +58,68 @@ jobs:
           PYTHONPATH=src python3 -m pytest \
             tests/test_generator.py tests/test_feeder.py tests/test_engine_bridge.py -q
 
+      - name: Per-run attestation, and a check that it says something
+        # `attest` records what was checked, what was DECLINED, and the measurement
+        # behind each finding. The module has existed since it was written; nothing
+        # produced one on a schedule, so there was no artifact for anyone to read and
+        # no history to compare a later run against.
+        #
+        # Run over the vendored declaration and the vendored capture, so it needs no
+        # hardware and no network and produces the same answer for anyone who clones.
+        #
+        # The exit code is deliberately NOT the gate here: this run finds real
+        # regressions in the QEMU capture and exits 1 every time, which is the
+        # correct answer to the question `detect` was asked. What is being checked is
+        # that the ARTIFACT is worth keeping.
+        run: |
+          set -euo pipefail
+          set +e
+          PYTHONPATH=src python3 -m bmc_sensor_audit.cli detect \
+            --config tests/fixtures/upstream/meta/bletchley \
+            --walk tests/fixtures/walk_qemu_bletchley.json \
+            --attest-out attestation.json > /dev/null
+          DETECT_STATUS=$?
+          set -e
+          echo "  detect exited ${DETECT_STATUS} (1 is expected: the capture carries real findings)"
+
+          # An empty or shapeless artifact uploads exactly as well as a good one, and
+          # nobody opens it until the day they need it. So it is inspected here.
+          python3 - <<'CHECK'
+          import json, sys
+          a = json.load(open("attestation.json"))
+          if a.get("format") != "bmc-sensor-audit/attestation/1":
+              sys.exit(f"unexpected artifact format: {a.get('format')!r}")
+          for key in ("findings", "not_checked", "evidence"):
+              if not isinstance(a.get(key), list):
+                  sys.exit(f"artifact has no {key!r} list")
+          if not a["findings"]:
+              sys.exit("the attestation records no findings; the vendored capture "
+                       "has always produced some, so either the artifact is empty "
+                       "or the pipeline stopped feeding the engine")
+          if len(a["evidence"]) != len(a["findings"]):
+              sys.exit(f"{len(a['findings'])} findings but {len(a['evidence'])} "
+                       f"evidence entries; a finding without its measurement is the "
+                       f"thing this artifact exists to carry")
+          if not a["not_checked"]:
+              sys.exit("the attestation records nothing as declined. An artifact "
+                       "listing only findings reads as a clean bill of health for "
+                       "every question nobody managed to ask")
+          if not a.get("engine", {}).get("boundary"):
+              sys.exit("the engine's own boundary statement is missing; the artifact "
+                       "must not claim more than the engine says it can support")
+          print(f"  {len(a['findings'])} finding(s), {len(a['not_checked'])} declined, "
+                f"{len(a['evidence'])} with measurements")
+          print(f"  boundary: {a['engine']['boundary']}")
+          CHECK
+
+      - name: Keep it, so a later run has something to compare against
+        uses: actions/upload-artifact@v4
+        with:
+          name: attestation-${{ github.run_number }}
+          path: attestation.json
+          # The schedule is daily, so this is roughly three months of drift history.
+          retention-days: 90
+
       - name: Stage 1 stays dependency-free
         # The engine is an optional extra. If Stage 1 ever acquires a hard dependency
         # on it, that is a design regression and it should fail here rather than be

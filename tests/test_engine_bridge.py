@@ -1027,3 +1027,80 @@ class TestTheAttestationArtifact:
                                  attest_fn=lambda *a, **k: _Refusing())
         assert built["unattested"] == ["p:reading: nope"]
         assert built["evidence"] == []
+
+
+class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
+    """The scale question, asked of the corpus this tool actually meets.
+
+    Full measurement in `docs/stage2/s3-corpus-scale.md`. Two things it found that
+    change what is worth asserting: model load costs about 3.4x the check at this
+    size, inverting the earlier prediction that `check()` was the thing to watch;
+    and the population the engine is asked about is the MODELLED set, not the
+    declared one.
+
+    The ceiling is deliberately about thirty times the measured median. Measured
+    spread is roughly a third of the median, so a tight bound would go red on
+    ordinary jitter -- and a row that fails for a legitimate reason every few runs
+    is one people learn to skip, which costs more than the row is worth. This
+    catches an order-of-magnitude regression from a release inside the pin, which
+    is the failure it can actually see.
+    """
+
+    CEILING_SECONDS = 10.0
+
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def run_over_the_corpus(tmp_path_factory):
+        import time
+
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
+            "fixtures" / "upstream"
+        declaration = load_declaration([str(upstream)])
+        model, manifest = generate(declaration)
+        path = tmp_path_factory.mktemp("scale") / "model.yaml"
+        path.write_text(yaml.safe_dump(model))
+
+        started = time.perf_counter()
+        session = EngineSession()
+        session.load_model(str(path))
+        for sensor in manifest.sensors:
+            session.add_entity(sensor.entity_type, sensor.entity_type,
+                               properties={"reading": 25.0})
+            session.add_observations(sensor.entity_type, "reading",
+                                     [25.0 + 0.1 * i for i in range(12)],
+                                     interval_seconds=60.0)
+        envelope = check(session).to_dict()
+        return time.perf_counter() - started, declaration, manifest, envelope
+
+    def test_the_whole_path_finishes_under_the_ceiling(self, run_over_the_corpus):
+        elapsed, _, _, _ = run_over_the_corpus
+        assert elapsed < self.CEILING_SECONDS, (
+            f"a full-corpus detect took {elapsed:.1f}s against a {self.CEILING_SECONDS}s "
+            f"ceiling. That is an order of magnitude off the measurement in "
+            f"docs/stage2/s3-corpus-scale.md, so re-measure before raising this")
+
+    def test_the_denominator_is_the_modelled_population_not_the_declared_one(
+            self, run_over_the_corpus):
+        """The number a scale claim has to name. `377 entities` overstates what the
+        engine is asked to do by more than a factor of two, and `check()` cost is
+        driven by what was fed."""
+        _, declaration, manifest, envelope = run_over_the_corpus
+        assert envelope["checked"]["entities"] == len(manifest.sensors)
+        assert len(manifest.sensors) < len(declaration.sensors), (
+            "every declaration is now modelled; the exclusion ledger has stopped "
+            "excluding, which is a bigger change than a timing one")
+        assert envelope["checked"]["invariants"] == 2 * len(manifest.sensors), (
+            "two axioms per modelled sensor is the shape the measurement assumed")
+
+    def test_nothing_was_dropped_between_the_declaration_and_the_ledger(
+            self, run_over_the_corpus):
+        """Non-vacuity for the assertion above: `modelled < declared` is only
+        honest if the difference is accounted for rather than lost."""
+        _, declaration, manifest, _ = run_over_the_corpus
+        excluded = sum(len(names) for names in manifest.excluded.values())
+        assert len(manifest.sensors) + excluded == len(declaration.sensors), (
+            f"{len(declaration.sensors)} declared, {len(manifest.sensors)} modelled, "
+            f"{excluded} excluded -- these do not add up, so something was dropped "
+            f"without a reason being recorded")
