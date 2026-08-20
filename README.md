@@ -48,7 +48,7 @@ does gate the tag, it belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 425 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 435 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
@@ -263,11 +263,16 @@ parses. The property set is *derived* from DMTF's own schemas by
 each document it read; a hand-written list would turn every name its author forgot
 into a confident accusation. Annotations are protocol metadata and are not
 reported, and neither is anything under `Oem` — that is the extension point the
-standard provides, and using it is not drift. Nothing here changes an exit code: a
-vendor extension is permitted, and a gate that failed on the first one would be
-switched off within a week. What the gate *does* catch is an undeclared property
-that **arrived**, which is a comparison between two firmware versions and is
-reported by `regression`.
+standard provides, and using it is not drift.
+
+**What it finds never changes an exit code; whether it ran does.** A vendor
+extension is permitted by the standard, and a gate that failed on the first one
+would be switched off within a week — so a property named here is reported and not
+scored. What the gate *does* catch is an undeclared property that **arrived**,
+which is a two-version comparison and belongs to `regression`. But a strictness
+check that was asked for and **could not run** exits `2`, the same as an
+unreadable config or an engine that is not installed: a run that could not
+complete the audit it was asked for must not read as clean.
 
 Real firmware carries none: the vendored OpenBMC 2.9.0 capture reports nothing
 undeclared across its six sensor objects. That is a small population and it is
@@ -276,8 +281,11 @@ fire on ordinary firmware.
 
 **A capture written before this existed says so rather than passing.** `capture`
 records the parsed sensor set, so an older capture carries no evidence about any
-property, and a strictness report over one prints `NOT CHECKED` instead of a clean
-board. Nothing undeclared and nobody looked are different facts.
+property; a strictness report over one prints `NOT CHECKED` and the run exits `2`.
+Nothing undeclared and nobody looked are different facts, and for a while only the
+prose said so while the exit code said clean — reported from outside, and the one
+place at that commit where this tool did to itself what it exists to catch
+elsewhere.
 
 ## Liveness (Stage 2)
 

@@ -14,6 +14,7 @@ finding without a source is a finding nobody can act on.
 from __future__ import annotations
 
 import json
+import textwrap
 from typing import Any
 
 from .inventory.diff import DiffReport
@@ -22,7 +23,8 @@ from .inventory.redfish import Walk
 
 __all__ = ["as_json", "as_text", "KIND_ORDER", "regression_as_text",
            "regression_as_json", "strict_fields_as_text", "strict_fields_payload",
-           "supplemental_as_text", "CHANGE_ORDER"]
+           "supplemental_as_text", "unobserved_reason", "unattested_notice",
+           "CHANGE_ORDER"]
 
 # Most actionable first. `declared_absent` leads because it is the case that no
 # other tool in the stack can produce at all.
@@ -97,8 +99,7 @@ def strict_fields_payload(walk: Walk) -> dict[str, Any]:
 
     payload: dict[str, Any] = {"checked": walk.fields_observed}
     if not walk.fields_observed:
-        payload["reason"] = ("this capture predates recording object properties; "
-                             "re-capture to check it")
+        payload["reason"] = unobserved_reason(walk)
         return payload
     payload["schemas"] = [{"schema": s["schema"], "sha256": s["sha256"]}
                           for s in redfish_schema.sources()]
@@ -310,6 +311,42 @@ def regression_as_text(report: RegressionReport, *, before: str, after: str) -> 
     return "\n".join(lines)
 
 
+def unattested_notice(artifact: dict, path: str) -> str:
+    """What to tell an operator who asked for evidence and got some of it, or none.
+
+    Empty when there is nothing to say, so the caller prints nothing rather than a
+    heading with no rows under it.
+
+    The artifact already accounts for this honestly -- `unattested` is a required
+    field and the shipped validator reads it -- but somebody who ran the command
+    and watched the terminal would find out only by opening the file. A quiet gap
+    is not a false claim, and it is still a gap nobody sees.
+    """
+    entries = artifact.get("unattested") or []
+    if not entries:
+        return ""
+    lines = [f"{len(entries)} problem type(s) could not be attested, so {path} "
+             f"carries findings without the measurements behind them:"]
+    lines += [f"    {entry}" for entry in entries]
+    return "\n".join(lines)
+
+
+def unobserved_reason(walk: Walk) -> str:
+    """Why this walk carries no field observations. There are two causes.
+
+    Named separately because the advice differs and a wrong explanation is its own
+    defect. A capture written before walks recorded object properties needs
+    re-capturing; a walk that could not reach the machine needs the transport
+    fixed, and telling its operator to re-capture is telling them to do the thing
+    that just failed.
+    """
+    if not walk.complete:
+        return ("the walk did not finish, so no sensor object was read and none "
+                "could be compared against the schema; fix the transport and re-run")
+    return ("this capture was written before walks recorded object properties, so "
+            "it carries no record of what any object reported; re-capture to check it")
+
+
 def strict_fields_as_text(walk: Walk, *, target: str) -> str:
     """Name the properties this machine reports that the schema does not declare.
 
@@ -326,9 +363,16 @@ def strict_fields_as_text(walk: Walk, *, target: str) -> str:
         # written before object properties were recorded carries no evidence
         # either way, and printing "nothing undeclared" over it would be a pass
         # asserted on an empty measurement.
-        lines.append("  NOT CHECKED. This capture was written before walks recorded")
-        lines.append("  which properties each object carried, so there is nothing here")
-        lines.append("  to compare against the schema. Re-capture to check it.")
+        #
+        # The prose alone is not enough, and that was reported from outside: this
+        # section said NOT CHECKED while the process exited 0, so a pipeline
+        # gating on the flag went green with the check never having run. The
+        # caller floors the exit at 2 -- see `_report_unobserved_fields`.
+        lines.append("  NOT CHECKED -- and this run exits 2, because a check that was")
+        lines.append("  asked for and could not run must not report as clean.")
+        lines.append(textwrap.fill(unobserved_reason(walk) + ".",
+                                   width=74, initial_indent="  ",
+                                   subsequent_indent="  "))
         return "\n".join(lines)
 
     sources = redfish_schema.sources()

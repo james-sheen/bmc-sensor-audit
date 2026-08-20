@@ -238,3 +238,37 @@ class TestTheCommandLine:
                  "HOME": "/root"})
         assert probe.returncode == 0, "importing the module pulled in the engine"
         assert self._run(path).returncode == 0
+
+
+class TestTheArtifactsGapsReachTheTerminal:
+    """An artifact carrying no evidence must not look like one carrying all of it.
+
+    `unattested` is a required field and `validate-attestation` reads it, so the
+    artifact itself is honest. What was missing is anywhere for somebody watching
+    the run to see it: they asked for the measurements behind each finding and
+    would learn only by opening the file that some are not there.
+
+    Swept for after the exit-code finding on `coverage --strict-fields`. It is the
+    weaker sibling -- a quiet claim rather than a false one -- and it carries no
+    exit floor for that reason: `check` completed and its findings stand, and what
+    did not complete is the evidence attached to them.
+    """
+
+    def test_nothing_is_printed_when_everything_was_attested(self):
+        from bmc_sensor_audit.report import unattested_notice
+
+        assert unattested_notice({"unattested": []}, "cert.json") == ""
+        assert unattested_notice({}, "cert.json") == ""
+
+    def test_each_declined_problem_type_is_named_with_its_reason(self):
+        from bmc_sensor_audit.report import unattested_notice
+
+        notice = unattested_notice(
+            {"unattested": ["threshold_exceeded: no attestation record",
+                            "stuck_at: unavailable"]}, "cert.json")
+        assert "2 problem type(s)" in notice
+        assert "cert.json" in notice
+        assert "threshold_exceeded: no attestation record" in notice
+        assert "stuck_at: unavailable" in notice
+        # It says what the artifact is missing, not merely that something is.
+        assert "without the measurements behind them" in notice

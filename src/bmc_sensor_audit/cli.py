@@ -175,6 +175,46 @@ def _report_unreadable(declaration) -> int:
     return EXIT_INCOMPLETE
 
 
+def _report_unobserved_fields(walk: Walk, requested: bool) -> int:
+    """A strictness check that was asked for and could not run floors the exit at 2.
+
+    Returns the floor, the same shape as `_report_unreadable`, so a caller composes
+    it with whatever else it found instead of choosing between them.
+
+    **Reported from outside, and it sat on the thesis.** The report printed
+    `NOT CHECKED` and the process exited 0, so a pipeline gating on
+    `--strict-fields` over a capture written before object properties were
+    recorded went green with the strictness half never having run. Honest prose
+    beside a clean exit code is the exact failure this tool is pointed at: the
+    exit code is the claim a gate reads, and the prose is not.
+
+    The precedent is this repository's own, in three places already -- `detect`
+    without the engine prints its coverage findings and exits 2, an unreadable
+    configuration file floors at 2, and an incomplete walk exits 2. All three are
+    the same sentence: a run that could not complete the audit it was asked for
+    must not read as clean.
+
+    **Only when the check was requested.** An old capture used without the flag is
+    a perfectly complete coverage run, and flooring it would fail every gate that
+    never asked the question.
+
+    **And only for the requested check.** `regression` computes field drift
+    opportunistically when both walks happen to carry observations, says so when
+    they do not, and does NOT floor: the removal, rename and threshold comparisons
+    it was actually asked for all completed. Flooring there would turn a fully
+    answered question red because a bonus one could not be asked, which is how a
+    gate teaches people to stop reading it.
+    """
+    if not requested or walk.fields_observed:
+        return EXIT_CLEAN
+    from .report import unobserved_reason
+
+    print(f"\nfield strictness was requested and could not be checked: "
+          f"{unobserved_reason(walk)}.\nThis run has not answered the question it "
+          f"was asked, so it does not exit clean.", file=sys.stderr)
+    return EXIT_INCOMPLETE
+
+
 def _cmd_coverage(args: argparse.Namespace) -> int:
     declaration = load_declaration(args.config)
     if not declaration.sensors and not declaration.unreadable:
@@ -197,19 +237,23 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
     print(rendered)
 
     if args.strict_fields and not args.json:
-        # Reported, never scored. A vendor extension is not a regression -- the
-        # firmware is doing something the standard permits, and a gate that failed
-        # on the first one gets switched off within a week, taking the signal with
-        # it. What DOES fail a gate is an extension that ARRIVED, which is a
-        # comparison between two firmware versions and belongs to `regression`.
+        # What it FINDS is reported and never scored. A vendor extension is not a
+        # regression -- the firmware is doing something the standard permits, and
+        # a gate that failed on the first one gets switched off within a week,
+        # taking the signal with it. What DOES fail a gate is an extension that
+        # ARRIVED, which is a comparison between two firmware versions and belongs
+        # to `regression`.
+        #
+        # Whether it RAN is a different question, and it is scored. See below.
         print(strict_fields_as_text(walk, target=target))
+    strict_floor = _report_unobserved_fields(walk, args.strict_fields)
 
     if not report.walk_complete:
         return EXIT_INCOMPLETE
     # Composed the way `detect` composes its two stages: the worse wins, and 2 outranks
     # 1 because could-not-read is a different claim from something-got-worse.
     stage1 = EXIT_REGRESSION if report.regressions else EXIT_CLEAN
-    return max(stage1, unreadable_floor)
+    return max(stage1, unreadable_floor, strict_floor)
 
 
 def _cmd_detect(args: argparse.Namespace) -> int:
@@ -331,10 +375,25 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         # in a channel no hook ever scans. The label is the operator's override; no
         # guessing at which hostnames look internal happens here, because that is
         # pattern-matching a judgement only they can make.
-        Path(args.attest_out).write_text(json.dumps(
-            build_attestation(session, envelope, described, manifest,
-                              target=args.attest_target_label or target,
-                              attest_fn=attest), indent=2))
+        artifact = build_attestation(session, envelope, described, manifest,
+                                     target=args.attest_target_label or target,
+                                     attest_fn=attest)
+        Path(args.attest_out).write_text(json.dumps(artifact, indent=2))
+
+        # Said on the terminal, not only inside the file. The artifact already
+        # accounts for this honestly -- `unattested` is a required field and the
+        # shipped validator reads it -- but an operator who asked for evidence and
+        # received an artifact carrying none finds that out only by opening it.
+        # A quiet gap is not a false claim, and it is still a gap nobody sees.
+        #
+        # No exit floor: `check` completed and its findings stand. What did not
+        # complete is the evidence the engine attaches to them, which is a weaker
+        # thing than the audit itself.
+        from .report import unattested_notice
+
+        notice = unattested_notice(artifact, args.attest_out)
+        if notice:
+            print(f"\n{notice}", file=sys.stderr)
     print(detect_as_text(outcome, feed_result))
 
     # Composed, not merged. The worse of the four wins, and `2` outranks `1` because

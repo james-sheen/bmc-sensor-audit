@@ -209,7 +209,10 @@ class TestTheReportCannotPassVacuously:
         assert not walk.fields_observed
         rendered = strict_fields_as_text(walk, target="old.json")
         assert "NOT CHECKED" in rendered
-        assert "Re-capture" in rendered
+        assert "re-capture" in rendered.lower()
+        # The report now states what the exit code will be, so that sentence is a
+        # claim like any other. `TestTheExitCodeIsTheClaim` is what makes it true.
+        assert "exits 2" in rendered
 
         payload = strict_fields_payload(walk)
         assert payload["checked"] is False
@@ -241,6 +244,15 @@ class TestTheReportCannotPassVacuously:
         assert reloaded.fields_observed
         assert [s.undeclared for s in reloaded] == [("VendorZone",)]
 
+    def test_the_observation_survives_a_capture_and_reload_json(self):
+        bmc = MockBMC(shape="sensors")
+        bmc.add("Drifting", reading=1.0, extra={"VendorZone": "a"})
+        with serve(bmc) as url:
+            walk = walk_chassis(RedfishClient(url))
+        payload = json.loads(json.dumps(walk.to_dict()))
+        assert payload["fields_observed"] is True
+        assert payload["sensors"][0]["undeclared"] == ["VendorZone"]
+
     def test_this_projects_own_fixture_markers_are_not_reported_as_drift(self):
         """`_shape` and `_resource` are this repository's, not the machine's.
 
@@ -252,3 +264,150 @@ class TestTheReportCannotPassVacuously:
                             "_resource": "Sensor", "@odata.id": "/x"}]}
         walk = walk_from_dict(raw)
         assert [s.undeclared for s in walk] == [()]
+
+
+class TestTheExitCodeIsTheClaim:
+    """The layer the tests above do not reach, and the one a CI gate reads.
+
+    **Reported from outside against `c40731b`.** Every test in the class above
+    passes on a build where `--strict-fields` prints `NOT CHECKED` and the process
+    exits 0 -- they pin the report and never the exit. So a pipeline gating on the
+    flag over a capture written before object properties were recorded went green
+    with the strictness half never having run: honest prose beside a clean exit
+    code, which is the exact failure this tool is pointed at in other people's
+    systems.
+
+    The rule these pin is the repository's own, already applied in three places:
+    a run that could not complete the audit it was asked for exits 2. What the
+    check FINDS is still never scored -- a vendor extension is permitted, and a
+    gate that failed on the first one would be switched off within a week.
+    """
+
+    @staticmethod
+    def _config_matching(walk_path: Path, tmp_path: Path) -> Path:
+        """A config declaring the first sensor the capture reports.
+
+        Derived from the capture rather than typed, so this cannot drift into
+        declaring a sensor the fixture stopped carrying -- which would make every
+        assertion below true for the wrong reason.
+        """
+        name = json.loads(walk_path.read_text())["sensors"][0]["name"]
+        config = tmp_path / "board.json"
+        config.write_text(json.dumps(
+            {"Name": "Board", "Exposes": [{"Name": name, "Type": "TMP75"}]}))
+        return config
+
+    @pytest.fixture
+    def old_capture(self):
+        path = FIXTURES / "walk_qemu_bletchley.json"
+        assert "fields_observed" not in json.loads(path.read_text()), (
+            "this fixture was re-captured; the pre-observation case needs one that "
+            "predates the field, or these tests assert nothing")
+        return path
+
+    def test_a_requested_check_that_could_not_run_exits_2(self, old_capture, tmp_path):
+        """The finding, as a test. This is the assertion that was missing."""
+        from bmc_sensor_audit.cli import main
+
+        config = self._config_matching(old_capture, tmp_path)
+        assert main(["coverage", "--config", str(config),
+                     "--walk", str(old_capture), "--strict-fields"]) == 2
+
+    def test_the_same_run_without_the_flag_is_clean(self, old_capture, tmp_path):
+        """The paired negative, and the reason the floor is not a blanket.
+
+        An old capture nobody asked a strictness question about is a complete
+        coverage run. Flooring it would fail every gate that never asked.
+        """
+        from bmc_sensor_audit.cli import main
+
+        config = self._config_matching(old_capture, tmp_path)
+        assert main(["coverage", "--config", str(config),
+                     "--walk", str(old_capture)]) == 0
+
+    def test_the_json_form_floors_too(self, old_capture, tmp_path):
+        """A machine-readable consumer reads the same exit code."""
+        from bmc_sensor_audit.cli import main
+
+        config = self._config_matching(old_capture, tmp_path)
+        assert main(["coverage", "--config", str(config), "--walk", str(old_capture),
+                     "--strict-fields", "--json"]) == 2
+
+    def test_could_not_complete_outranks_something_got_worse(self, old_capture,
+                                                             tmp_path):
+        """2 over 1, the composition this CLI already uses everywhere else. A run
+        with regressions AND an unrunnable check has not finished asking."""
+        from bmc_sensor_audit.cli import main
+
+        config = tmp_path / "absent.json"
+        config.write_text(json.dumps(
+            {"Name": "Board",
+             "Exposes": [{"Name": "NOTHING_REPORTS_THIS", "Type": "TMP75"}]}))
+        assert main(["coverage", "--config", str(config),
+                     "--walk", str(old_capture)]) == 1
+        assert main(["coverage", "--config", str(config), "--walk", str(old_capture),
+                     "--strict-fields"]) == 2
+
+    def test_a_check_that_ran_and_found_drift_is_still_clean(self, tmp_path):
+        """What it FINDS is reported and never scored, which has not changed.
+
+        A vendor extension is something the standard permits. The exit code moves
+        for a check that could not run, never for one that ran and had something
+        to say.
+        """
+        from bmc_sensor_audit.cli import main
+
+        bmc = MockBMC(shape="sensors")
+        bmc.add("Drifting Temp", reading=32.0, extra={"FanSpeedPercent": 40})
+        capture = tmp_path / "fresh.json"
+        with serve(bmc) as url:
+            assert main(["capture", "--target", url, "--out", str(capture)]) == 0
+
+        config = tmp_path / "board.json"
+        config.write_text(json.dumps(
+            {"Name": "Board", "Exposes": [{"Name": "Drifting Temp", "Type": "TMP75"}]}))
+        assert main(["coverage", "--config", str(config), "--walk", str(capture),
+                     "--strict-fields"]) == 0
+
+    def test_a_walk_that_did_not_finish_says_so_rather_than_blaming_the_capture(self):
+        """Two causes, two pieces of advice.
+
+        Telling the operator of a failed walk to re-capture is telling them to do
+        the thing that just failed. The floor is the same; the sentence is not.
+        """
+        from bmc_sensor_audit.report import unobserved_reason
+
+        bmc = MockBMC(shape="sensors", fail={"/redfish/v1/Chassis": 500})
+        bmc.add("Inlet", reading=20.0)
+        with serve(bmc) as url:
+            walk = walk_chassis(RedfishClient(url))
+        assert not walk.fields_observed and not walk.complete
+        assert "did not finish" in unobserved_reason(walk)
+        assert "re-capture" not in unobserved_reason(walk).lower()
+
+        old = walk_from_dict(
+            json.loads((FIXTURES / "walk_qemu_bletchley.json").read_text()))
+        assert "re-capture" in unobserved_reason(old).lower()
+
+    def test_regression_does_not_floor_on_uncomparable_fields(self, tmp_path):
+        """The asymmetry, pinned so nobody tidies it into a blanket rule.
+
+        `regression` computes field drift opportunistically when both walks happen
+        to carry observations and says so when they do not. The removal, rename
+        and threshold comparisons it was actually asked for all completed, so it
+        answers them. Flooring here would turn a fully answered question red
+        because a bonus one could not be asked -- which is how a gate teaches
+        people to stop reading it.
+        """
+        from bmc_sensor_audit.cli import main
+
+        bmc = MockBMC(shape="sensors")
+        bmc.add("Inlet", reading=20.0)
+        fresh = tmp_path / "after.json"
+        with serve(bmc) as url:
+            main(["capture", "--target", url, "--out", str(fresh)])
+
+        old = tmp_path / "before.json"
+        old.write_text((FIXTURES / "walk_qemu_bletchley.json").read_text())
+        # Both walks complete; only the field observations are incomparable.
+        assert main(["regression", "--before", str(old), "--after", str(fresh)]) == 1
