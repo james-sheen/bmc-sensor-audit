@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you reference bmc-sensor-audit in academic or technical work, please cite as follows."
+title: "bmc-sensor-audit: find the sensors that should be reporting and are not"
+abstract: "Diffs an OpenBMC entity-manager declaration against what a BMC actually
+  reports over Redfish, so sensors that went absent, were disabled at the factory,
+  or froze at a plausible value are named instead of silently missing. Presence is
+  three-valued — reading, disabled, absent — and liveness is judged over
+  observation history by the arbiter-engine invariant checker. A run that cannot
+  be completed exits distinctly from one that found regressions, so 'could not
+  verify' never reads as 'clean'. Parser behaviour is derived by measurement of
+  the full upstream configuration corpus, an approach that has so far surfaced
+  two defects in the upstream declarations themselves. Released under Apache 2.0."
+type: software
+authors:
+  - family-names: "Sheen"
+    given-names: "James"
+    alias: "james-sheen"
+license: Apache-2.0
+repository-code: "https://github.com/james-sheen/bmc-sensor-audit"
+url: "https://github.com/james-sheen/bmc-sensor-audit"
+keywords:
+  - openbmc
+  - redfish
+  - bmc
+  - entity-manager
+  - sensors
+  - hardware-monitoring
+  - liveness
