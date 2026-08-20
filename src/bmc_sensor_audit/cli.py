@@ -215,6 +215,44 @@ def _report_unobserved_fields(walk: Walk, requested: bool) -> int:
     return EXIT_INCOMPLETE
 
 
+def _report_uncomparable_fields(before: Walk, after: Walk, requested: bool) -> int:
+    """The same rule, applied to the comparison rather than to one walk.
+
+    Field drift is computed opportunistically when both walks happen to carry
+    observations, and `regression` reports honestly when they do not -- but until
+    there was a flag, that was ALL it could do. A pipeline that gates firmware on
+    `regression` and needs drift covered had no handle: the run said *not
+    computed* in prose and exited on the strength of the comparisons that did run.
+    The same could-not-complete-reads-as-clean shape as the strictness finding,
+    one door over, and reported from outside in the same way.
+
+    **A flag rather than a default, and the weight is the reason.** Flooring
+    flagless would turn every regression run against an older baseline into exit
+    2, breaking the removal and rename gating that works perfectly well on those
+    captures -- a real cost paid by exactly the operators the subcommand serves
+    best. So drift stays best-effort until somebody asks for it, and asking is
+    what makes the existing rule apply.
+
+    **Which side is named**, because the fix differs: one old capture means
+    re-capture that one, and two mean the baseline predates the field entirely.
+    """
+    if not requested or (before.fields_observed and after.fields_observed):
+        return EXIT_CLEAN
+    from .report import unobserved_reason
+
+    missing = [(label, walk) for label, walk in (("--before", before), ("--after", after))
+               if not walk.fields_observed]
+    which = ("neither capture carries a record" if len(missing) == 2
+             else "one of the two captures carries no record")
+    print(f"\nfield drift was requested and could not be compared: {which} of what "
+          f"properties each object reported.", file=sys.stderr)
+    for label, walk in missing:
+        print(f"    {label}: {unobserved_reason(walk)}", file=sys.stderr)
+    print("This run has not answered the question it was asked, so it does not "
+          "exit clean.", file=sys.stderr)
+    return EXIT_INCOMPLETE
+
+
 def _cmd_coverage(args: argparse.Namespace) -> int:
     declaration = load_declaration(args.config)
     if not declaration.sensors and not declaration.unreadable:
@@ -436,9 +474,23 @@ def _cmd_regression(args: argparse.Namespace) -> int:
     print(regression_as_json(report, before=args.before, after=args.after) if args.json
           else regression_as_text(report, before=args.before, after=args.after))
 
+    if args.strict_fields and not args.json:
+        # The AFTER walk's own strictness, so the flag means the same sentence in
+        # both commands -- apply field strictness, and require it to be
+        # applicable -- rather than sharing a name with `coverage` while doing
+        # something else. Two flags spelled alike that mean different things is
+        # its own defect, and a worse one than two names.
+        #
+        # The absolute view and the delta answer different questions. `field_drift`
+        # above names what ARRIVED; this names what the firmware carries now,
+        # which is what a downstream parser actually meets.
+        print(strict_fields_as_text(after, target=args.after))
+    strict_floor = _report_uncomparable_fields(before, after, args.strict_fields)
+
     if not report.complete:
         return EXIT_INCOMPLETE
-    return EXIT_REGRESSION if report.regressions else EXIT_CLEAN
+    stage1 = EXIT_REGRESSION if report.regressions else EXIT_CLEAN
+    return max(stage1, strict_floor)
 
 
 def _cmd_validate_attestation(args: argparse.Namespace) -> int:
@@ -520,6 +572,10 @@ def build_parser() -> argparse.ArgumentParser:
     regression.add_argument("--after", required=True,
                             help="a capture taken after it")
     regression.add_argument("--json", action="store_true", help="machine-readable output")
+    regression.add_argument("--strict-fields", action="store_true",
+                            help="also apply field strictness, and exit 2 if either "
+                                 "capture carries no record of object properties, "
+                                 "so drift cannot be compared")
     regression.set_defaults(func=_cmd_regression)
 
     detect = subparsers.add_parser(

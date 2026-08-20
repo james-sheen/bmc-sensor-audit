@@ -389,15 +389,21 @@ class TestTheExitCodeIsTheClaim:
             json.loads((FIXTURES / "walk_qemu_bletchley.json").read_text()))
         assert "re-capture" in unobserved_reason(old).lower()
 
-    def test_regression_does_not_floor_on_uncomparable_fields(self, tmp_path):
-        """The asymmetry, pinned so nobody tidies it into a blanket rule.
+    def test_regression_does_not_floor_on_uncomparable_fields_unasked(self, tmp_path):
+        """The default, pinned so nobody tidies it into a blanket rule.
 
         `regression` computes field drift opportunistically when both walks happen
         to carry observations and says so when they do not. The removal, rename
         and threshold comparisons it was actually asked for all completed, so it
-        answers them. Flooring here would turn a fully answered question red
-        because a bonus one could not be asked -- which is how a gate teaches
-        people to stop reading it.
+        answers them. Flooring by default would turn a fully answered question red
+        on every older baseline -- which is how a gate teaches people to stop
+        reading it.
+
+        Drift CAN be required, since the seam was reported from outside:
+        `regression --strict-fields` promotes it to a requested check and the
+        same rule then applies. That flag is exercised in
+        `test_regression_gate.py::TestDriftCanBeRequired`; what this pins is that
+        it stays a request rather than becoming the default.
         """
         from bmc_sensor_audit.cli import main
 

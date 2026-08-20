@@ -48,7 +48,7 @@ does gate the tag, it belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 435 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 441 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
@@ -286,6 +286,16 @@ Nothing undeclared and nobody looked are different facts, and for a while only t
 prose said so while the exit code said clean — reported from outside, and the one
 place at that commit where this tool did to itself what it exists to catch
 elsewhere.
+
+**`regression --strict-fields` says the same sentence about the comparison.**
+Between two walks, drift is computed only when *both* captures recorded object
+properties, and by default a run that cannot compare them says so and is judged
+on the removals, renames and thresholds it could compare — because flooring by
+default would fail every gate run against an older baseline, over a question
+nobody asked. The flag asks it. With it, an uncomparable run exits `2` and names
+which capture is the stale one, and the after-walk's own strictness is printed
+alongside the delta: `field_drift` names what **arrived**, the section names what
+the firmware carries **now**.
 
 ## Liveness (Stage 2)
 

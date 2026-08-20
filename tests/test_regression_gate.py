@@ -301,6 +301,124 @@ class TestTheVocabularyStaysWhole:
             "gate, and reads as coverage that is not there")
 
 
+class TestDriftCanBeRequired:
+    """`--strict-fields` on `regression`: the flag that gives drift a handle.
+
+    **Reported from outside, as the sibling of the coverage finding.** Drift is
+    computed opportunistically when both walks happen to carry observations, and
+    the report says so when they do not -- but until this flag existed that was
+    all it could do. A pipeline gating firmware on `regression` and needing drift
+    covered had no way to ask for it: the run printed *not computed* and exited on
+    the strength of the comparisons that did run.
+
+    **A flag, not a default, and the weight is the argument.** Flooring flagless
+    would turn every regression run against an older baseline into exit 2 and
+    break the removal and rename gating that works perfectly well on those
+    captures. So drift stays best-effort until somebody asks, and asking is what
+    makes the existing could-not-complete rule apply.
+
+    The flag is spelled as it is on `coverage` because it means the same sentence
+    -- apply field strictness, and require it to be applicable. Two flags spelled
+    alike that mean different things would be a worse defect than two names, so
+    this one also prints the after-walk's own strictness, exactly as `coverage`
+    prints the walk's.
+    """
+
+    @staticmethod
+    def _old() -> Path:
+        return FIXTURES / "walk_qemu_bletchley.json"
+
+    def _fresh(self, tmp_path: Path, name: str, **kwargs) -> Path:
+        bmc = MockBMC(shape="sensors")
+        bmc.add("Inlet", reading=20.0, **kwargs)
+        path = tmp_path / name
+        path.write_text(json.dumps(_walk(bmc).to_dict()))
+        return path
+
+    def test_without_the_flag_nothing_changes(self, tmp_path):
+        """The behaviour every existing user has. Two pre-property captures with
+        no changes between them still exit 0."""
+        from bmc_sensor_audit.cli import main
+
+        old = tmp_path / "old.json"
+        old.write_text(self._old().read_text())
+        same = tmp_path / "same.json"
+        same.write_text(self._old().read_text())
+        assert main(["regression", "--before", str(old), "--after", str(same)]) == 0
+
+    def test_with_the_flag_an_uncomparable_run_exits_2(self, tmp_path):
+        from bmc_sensor_audit.cli import main
+
+        old = tmp_path / "old.json"
+        old.write_text(self._old().read_text())
+        same = tmp_path / "same.json"
+        same.write_text(self._old().read_text())
+        assert main(["regression", "--before", str(old), "--after", str(same),
+                     "--strict-fields"]) == 2
+
+    def test_one_stale_side_is_enough_and_the_message_names_it(self, tmp_path, capsys):
+        """The fix differs by side: one old capture means re-capture that one."""
+        from bmc_sensor_audit.cli import main
+
+        old = tmp_path / "old.json"
+        old.write_text(self._old().read_text())
+        fresh = self._fresh(tmp_path, "after.json")
+        assert main(["regression", "--before", str(old), "--after", str(fresh),
+                     "--strict-fields"]) == 2
+        err = capsys.readouterr().err
+        assert "--before" in err and "--after:" not in err
+        assert "one of the two captures" in err
+
+    def test_two_fresh_captures_exit_on_their_content(self, tmp_path):
+        """The flag adds a requirement, not a verdict. Two walks that both looked
+        are judged by what changed between them and nothing else."""
+        from bmc_sensor_audit.cli import main
+
+        before = self._fresh(tmp_path, "before.json")
+        after = self._fresh(tmp_path, "after.json")
+        assert main(["regression", "--before", str(before), "--after", str(after),
+                     "--strict-fields"]) == 0
+
+        drifted = self._fresh(tmp_path, "drifted.json", extra={"VendorZone": "a"})
+        # Drift arrived, and arriving drift is still not a regression.
+        assert main(["regression", "--before", str(before), "--after", str(drifted),
+                     "--strict-fields"]) == 0
+
+    def test_the_flag_also_prints_the_after_walks_own_strictness(self, tmp_path, capsys):
+        """What makes it the same flag rather than a name collision.
+
+        `field_drift` above names what ARRIVED; this names what the firmware
+        carries now, which is what a downstream parser actually meets.
+        """
+        from bmc_sensor_audit.cli import main
+
+        before = self._fresh(tmp_path, "before.json", extra={"VendorZone": "a"})
+        after = self._fresh(tmp_path, "after.json", extra={"VendorZone": "a"})
+        main(["regression", "--before", str(before), "--after", str(after),
+              "--strict-fields"])
+        out = capsys.readouterr().out
+        assert "Field strictness" in out
+        assert "VendorZone" in out
+        # Carried by both walks, so it did not arrive and is not a change.
+        assert "field_drift" not in out
+
+    def test_a_real_regression_still_outranks_nothing_and_is_not_masked(self, tmp_path):
+        """2 over 1 here as everywhere: a run with removals AND an unaskable drift
+        question has not finished asking."""
+        from bmc_sensor_audit.cli import main
+
+        old = tmp_path / "old.json"
+        old.write_text(self._old().read_text())
+        emptied = tmp_path / "emptied.json"
+        payload = json.loads(self._old().read_text())
+        payload["sensors"] = payload["sensors"][:1]
+        emptied.write_text(json.dumps(payload))
+
+        assert main(["regression", "--before", str(old), "--after", str(emptied)]) == 1
+        assert main(["regression", "--before", str(old), "--after", str(emptied),
+                     "--strict-fields"]) == 2
+
+
 class TestTheCommandLine:
     def test_captures_in_the_wrong_order_are_refused_not_swapped(self, tmp_path, capsys):
         """A reversed comparison reports every removal as an addition, which reads
