@@ -24,12 +24,16 @@ UPSTREAM = ROOT / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(ROOT / "src"))
 
 from bmc_sensor_audit.detect.feeder import (  # noqa: E402
-    STUCK_AT_SAMPLE_FLOOR, evaluate, feed, unmapped_observations)
-from bmc_sensor_audit.detect.generator import (  # noqa: E402
-    READING, READING_LOW, generate)
+    ENVELOPE_SCHEMA_VERSION, STUCK_AT_SAMPLE_FLOOR, evaluate, feed,
+    unmapped_observations)
+from bmc_sensor_audit.detect.generator import READING, generate  # noqa: E402
 from bmc_sensor_audit.inventory.diff import compare  # noqa: E402
 from bmc_sensor_audit.inventory.entity_manager import load_declaration  # noqa: E402
 from bmc_sensor_audit.inventory.redfish import walk_from_dict  # noqa: E402
+
+# A sentinel distinct from every value the field could legitimately take,
+# including None -- `None` is one of the wrong versions under test.
+_ABSENT = object()
 
 
 class StubSession:
@@ -90,28 +94,35 @@ class TestOnlyPresentAndReadingIsFed:
         assert result.skipped_not_reading == 1
         assert session.entities == {}
 
-    def test_the_lower_bound_indicator_is_fed_negated(self, built):
-        """The negation has to happen on the way in as well as in the model, or the
-        indicator the model declares is never supplied and declines forever."""
+    def test_a_lower_bounded_sensor_is_fed_its_reading_verbatim(self, built):
+        """These two used to assert that a lower-bounded sensor was ALSO fed a
+        mirrored `-value` property, because BOUNDEDNESS could only test upward.
+        The engine takes floors natively now, so what has to be true is that the
+        reading arrives unmodified and nothing else arrives beside it -- a
+        surviving mirror would feed a value no indicator reads."""
         declaration, _, manifest = built
         sensor = next(s for s in manifest.sensors if s.has_lower)
         session = StubSession()
         feed(session, manifest,
              [_report(declaration, [(sensor.declared_name, 2.5, "Enabled")])])
         _, properties = session.entities[sensor.entity_type]
-        assert properties[READING] == 2.5
-        assert properties[READING_LOW] == -2.5
+        assert properties == {READING: 2.5}
 
-    def test_a_sensor_with_no_lower_bound_gets_no_negated_property(self, built):
+    def test_a_lower_bounded_sensor_gets_one_observation_series(self, built):
+        """The mirror had a second half: a negated series fed alongside the real
+        one. Two series where the model declares one indicator is an unread feed,
+        and the engine reports those only if something asks."""
         declaration, _, manifest = built
-        sensor = next((s for s in manifest.sensors if not s.has_lower), None)
-        if sensor is None:
-            pytest.skip("every vendored sensor happens to declare a lower bound")
+        sensor = next(s for s in manifest.sensors if s.has_lower)
         session = StubSession()
         feed(session, manifest,
-             [_report(declaration, [(sensor.declared_name, 2.5, "Enabled")])])
-        _, properties = session.entities[sensor.entity_type]
-        assert READING_LOW not in properties
+             [_report(declaration, [(sensor.declared_name, v, "Enabled")])
+              for v in (2.5, 2.6, 2.7)])
+        fed = [call for call in session.observations
+               if call[0] == sensor.entity_type]
+        assert len(fed) == 1, f"expected one series, got {[c[1] for c in fed]}"
+        assert fed[0][1] == READING
+        assert fed[0][2] == [2.5, 2.6, 2.7]
 
 
 class TestLivenessWarmsUpAndSaysSo:
@@ -323,3 +334,84 @@ class TestTheDetectCommandComposesTwoStages:
             pass
         result = self._run(tmp_path)
         assert "unaffected" in result.stderr
+
+
+class TestTheEnvelopeSchemaVersionIsChecked:
+    """The wire contract is versioned separately from the package, and everything
+    this module reads is keyed to it.
+
+    Nothing consumed `meta.schema_version` before: the field shipped, was described
+    in the engine's compatibility notes, and the one consumer that parses the
+    envelope by hand ignored it. A shape change would then have arrived as findings
+    filed under the wrong side of the band and declines landing in `unclassified`,
+    which reads like a bad board rather than a moved contract.
+    """
+
+    def _envelope(self, version, **rest):
+        envelope = {"checked": {}, "findings": [], "not_checked": [], **rest}
+        if version is not _ABSENT:
+            envelope["meta"] = {"schema_version": version, "source": "live"}
+        return envelope
+
+    def test_the_supported_version_passes_silently(self, built):
+        _, _, manifest = built
+        outcome = evaluate(self._envelope(ENVELOPE_SCHEMA_VERSION), {}, manifest)
+        assert outcome.schema_mismatch is None
+
+    @pytest.mark.parametrize("version", [2, 0, "1", 1.5, None])
+    def test_any_other_version_is_refused_and_names_both_numbers(self, built, version):
+        """Including `"1"` and `1.5`. A string that looks like the right number is
+        the case a `!=` comparison gets right and an `int()` coercion gets wrong."""
+        _, _, manifest = built
+        outcome = evaluate(self._envelope(version), {}, manifest)
+        assert outcome.schema_mismatch is not None
+        assert str(version) in outcome.schema_mismatch
+        assert str(ENVELOPE_SCHEMA_VERSION) in outcome.schema_mismatch
+
+    def test_an_absent_version_is_not_a_mismatch(self, built):
+        """0.1.6 is inside this project's pin and predates the field. Reading absent
+        as wrong would refuse an engine the project supports -- the same shape as
+        reading a missing introspection key as *unsupported* rather than *empty*,
+        which this repository has already been caught by once."""
+        _, _, manifest = built
+        outcome = evaluate(self._envelope(_ABSENT), {}, manifest)
+        assert outcome.schema_mismatch is None
+
+    def test_a_mismatch_does_not_silently_suppress_the_findings(self, built):
+        """Reported alongside, not instead. Dropping the findings would leave an
+        operator with a warning and no evidence; keeping them unlabelled would
+        present a reading taken through the wrong contract as a verdict."""
+        _, _, manifest = built
+        sensor = manifest.sensors[0]
+        envelope = self._envelope(99, findings=[
+            {"entity_id": sensor.entity_type, "severity": "critical",
+             "problem_type": "threshold_exceeded:reading",
+             "reason": "reading exceeds critical threshold"}])
+        outcome = evaluate(envelope, {}, manifest)
+        assert outcome.schema_mismatch is not None
+        assert len(outcome.findings) == 1
+
+    def test_the_real_engine_stamps_the_version_this_build_expects(self):
+        """The one that would catch an engine bump inside the pin moving the shape.
+
+        Asserted against a live envelope rather than the constant, because a
+        constant agreeing with itself is not a check.
+        """
+        pytest.importorskip("arbiter_engine.api",
+                            reason="engine is the optional [detect] extra")
+        import tempfile
+
+        import yaml
+        from arbiter_engine.api import EngineSession, check
+        model = {"domain": {"id": "d", "name": "n", "entity_types": ["S"],
+                            "indicators": {"S": [{"name": "reading", "type": "NUMERIC",
+                                                  "axioms": ["BOUNDEDNESS"],
+                                                  "warning": 1, "critical": 2,
+                                                  "window": "15m"}]}}}
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+            yaml.safe_dump(model, handle)
+        session = EngineSession()
+        session.load_model(handle.name)
+        session.add_entity("e", "S", properties={"reading": 5.0})
+        envelope = check(session).to_dict()
+        assert envelope["meta"]["schema_version"] == ENVELOPE_SCHEMA_VERSION

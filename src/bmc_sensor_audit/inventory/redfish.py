@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import json
 import ssl
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -97,6 +98,10 @@ class Walk:
     chassis: list[str] = field(default_factory=list)
     shapes_seen: set[str] = field(default_factory=set)
     divergence: list[tuple[str, str]] = field(default_factory=list)
+    # (path, seconds) per fetch. Empty for a walk rehydrated from a capture
+    # taken before this was recorded -- absent and zero are different facts,
+    # and a missing measurement must not read as an instant response.
+    latencies: list[tuple[str, float]] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
@@ -134,6 +139,7 @@ class Walk:
             "chassis": list(self.chassis),
             "shapes_seen": sorted(self.shapes_seen),
             "errors": [list(e) for e in self.errors],
+            "latencies": [[p, round(t, 6)] for p, t in self.latencies],
             "sensors": [
                 {"name": s.name, "path": s.path, "reading": s.reading,
                  "units": s.units, "state": s.state, "health": s.health,
@@ -152,6 +158,10 @@ class RedfishClient:
                  timeout: float = 15.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # (path, seconds) per fetch, in walk order. On the client rather than
+        # threaded through every walk function: the walker calls `get` from six
+        # places and a parameter would have to reach all of them.
+        self.latencies: list[tuple[str, float]] = []
         self._auth: str | None = None
         if username is not None:
             raw = f"{username}:{password or ''}".encode()
@@ -169,8 +179,20 @@ class RedfishClient:
         request = urllib.request.Request(url, headers={"Accept": "application/json"})
         if self._auth:
             request.add_header("Authorization", self._auth)
+        # One field, taken at the single place every fetch passes through. A BMC
+        # whose Redfish stack is degrading answers more slowly long before it
+        # answers wrongly, and the walk already touches every endpoint -- so the
+        # measurement costs a clock read and nothing else.
+        #
+        # `perf_counter` rather than wall time: this is an interval, and a wall
+        # clock that steps during a walk would record a negative one.
+        started = time.perf_counter()
         with urllib.request.urlopen(request, timeout=self.timeout, context=self._ctx) as response:
             body = response.read()
+        # Measured around the read as well as the request. A Redfish collection
+        # arrives in one body, and timing only the connection would report a slow
+        # BMC as fast.
+        self.latencies.append((path, time.perf_counter() - started))
         parsed = json.loads(body)
         if not isinstance(parsed, dict):
             raise ValueError(f"{url} returned {type(parsed).__name__}, not an object")
@@ -236,11 +258,16 @@ def read_sensor_object(obj: dict[str, Any], path: str, shape: str = "sensors") -
 def walk_chassis(client: RedfishClient) -> Walk:
     """Enumerate every sensor the target reports, across both tree shapes."""
     walk = Walk()
+    # Reset first: a client reused across walks would hand the second walk the
+    # first one's timings, which is the shape of measurement bug that reads as a
+    # BMC getting slower while nothing changed.
+    client.latencies = []
 
     try:
         collection = client.get("/redfish/v1/Chassis")
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
         walk.errors.append(("/redfish/v1/Chassis", str(exc)))
+        walk.latencies = list(client.latencies)
         return walk
 
     for chassis_path in _members(collection):
@@ -267,6 +294,7 @@ def walk_chassis(client: RedfishClient) -> Walk:
                 _walk_legacy(client, target, walk, shape)
 
     _merge_shapes(walk)
+    walk.latencies = list(client.latencies)
     return walk
 
 
@@ -364,6 +392,8 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
     """
     walk = Walk()
     walk.errors = [tuple(e) for e in payload.get("errors", ())]
+    walk.latencies = [(str(p), float(t))
+                      for p, t in payload.get("latencies", ())]
     walk.chassis = list(payload.get("chassis", ()))
     walk.shapes_seen = set(payload.get("shapes_seen", ()))
 

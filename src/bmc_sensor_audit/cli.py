@@ -52,6 +52,15 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     print(f"wrote {len(walk)} sensor(s) to {args.out}")
     print(f"  chassis     {len(walk.chassis)}")
     print(f"  tree shapes {sorted(walk.shapes_seen) or '(none found)'}")
+    if walk.latencies:
+        times = sorted(t for _, t in walk.latencies)
+        slowest_path, slowest = max(walk.latencies, key=lambda pair: pair[1])
+        # The TAIL, not the mean. A Redfish stack that has started to struggle
+        # answers most requests normally and a few very slowly, and a mean over a
+        # hundred fetches hides exactly that.
+        print(f"  fetches     {len(times)}  median {times[len(times)//2]:.3f}s  "
+              f"slowest {slowest:.3f}s")
+        print(f"    slowest was {slowest_path}")
     if walk.divergence:
         print(f"  {len(walk.divergence)} sensor(s) present on only one interface")
     if not walk.complete:
@@ -206,9 +215,33 @@ def _cmd_detect(args: argparse.Namespace) -> int:
 
     from .detect.feeder import evaluate, feed
     from .detect.generator import generate
+    from .detect.supplemental import (SupplementalError, load_supplemental,
+                                      unmatched_names)
     from .report import detect_as_text
 
-    model, manifest = generate(declaration, expect_variation=not args.no_stuck_at)
+    supplemental = None
+    if args.supplemental:
+        # A refusal here stops the run rather than degrading it. A supplemental file
+        # that failed to load and carried on would produce a report with no
+        # disagreements in it because nothing was ever compared -- and from the
+        # outside that is identical to a board where every declared pair agrees.
+        try:
+            supplemental = load_supplemental(args.supplemental)
+        except SupplementalError as error:
+            print(f"\n{error}", file=sys.stderr)
+            return EXIT_INCOMPLETE
+        missing = unmatched_names(supplemental,
+                                  {s.display_name for s in declaration.sensors})
+        if missing:
+            print(f"\n{args.supplemental} names {len(missing)} sensor(s) this "
+                  f"configuration does not declare. A name that matches nothing "
+                  f"creates no check, silently:", file=sys.stderr)
+            for name in missing:
+                print(f"    {name}", file=sys.stderr)
+            return EXIT_INCOMPLETE
+
+    model, manifest = generate(declaration, expect_variation=not args.no_stuck_at,
+                               supplemental=supplemental)
     if args.model_out:
         Path(args.model_out).write_text(yaml.safe_dump(model))
     if args.manifest_out:
@@ -221,16 +254,35 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     session.load_model(model_path)
 
     feed_result = feed(session, manifest, reports)
-    outcome = evaluate(check(session).to_dict(), model_describe(session).to_dict(),
-                       manifest, strict_declines=args.strict_declines)
+    envelope = check(session).to_dict()
+    described = model_describe(session).to_dict()
+    outcome = evaluate(envelope, described, manifest,
+                       strict_declines=args.strict_declines,
+                       feed_result=feed_result)
+
+    if args.attest_out:
+        # After `check`, never before: `attest` refuses on an unchecked session with
+        # `source: unavailable`, and that refusal reads a lot like a clean run.
+        from arbiter_engine.api import attest
+
+        from .detect.attestation import build_attestation
+        Path(args.attest_out).write_text(json.dumps(
+            build_attestation(session, envelope, described, manifest,
+                              target=target, attest_fn=attest), indent=2))
     print(detect_as_text(outcome, feed_result))
 
-    # Composed, not merged. The worse of the three wins, and `2` outranks `1` because
+    # Composed, not merged. The worse of the four wins, and `2` outranks `1` because
     # could-not-complete is a different claim from something-got-worse. The config
-    # floor is one of the three: a run that could not read part of its own input has
+    # floor is one of them: a run that could not read part of its own input has
     # not verified the board, however clean the part it could read came out.
+    #
+    # An envelope whose schema version this build does not parse floors at 2 for the
+    # same reason and not at 1: nothing was found to be worse, we were unable to
+    # read the answer. Applied here rather than inside `DetectOutcome.exit_code`,
+    # which returns 0 or 1 by contract -- `2` is the caller's to give.
     stage1 = EXIT_REGRESSION if current.regressions else EXIT_CLEAN
-    return max(stage1, outcome.exit_code, unreadable_floor)
+    schema_floor = EXIT_INCOMPLETE if outcome.schema_mismatch else EXIT_CLEAN
+    return max(stage1, outcome.exit_code, unreadable_floor, schema_floor)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -281,8 +333,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="fail on data-sufficiency and unrecognised declines too")
     detect.add_argument("--no-stuck-at", action="store_true",
                         help="do not expect readings to vary; turns off liveness")
+    detect.add_argument("--supplemental",
+                        help="operator declarations the configuration cannot make: "
+                             "which sensors are redundant, which are counters")
     detect.add_argument("--model-out", help="write the generated domain model here")
     detect.add_argument("--manifest-out", help="write the generation manifest here")
+    detect.add_argument("--attest-out",
+                        help="write a per-run record of what was checked, what was "
+                             "declined, and the measurements behind each finding")
     detect.set_defaults(func=_cmd_detect)
 
     capture = subparsers.add_parser(

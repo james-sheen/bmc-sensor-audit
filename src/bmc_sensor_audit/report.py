@@ -156,6 +156,13 @@ def detect_as_text(outcome, feed_result) -> str:
     reason this build does not recognise is neither and must not be filed as either.
     """
     lines = ["", "Liveness (Stage 2)", "------------------"]
+    if outcome.schema_mismatch:
+        # First, and not folded into the finding list. Everything below it was read
+        # through a contract this build no longer recognises, so it is reported as
+        # unreliable rather than presented as a verdict.
+        lines.append("  ** ENVELOPE SCHEMA MISMATCH **")
+        lines.append(f"     {outcome.schema_mismatch}")
+        lines.append("")
     lines.append(f"  fed to the engine    {feed_result.fed:>5}")
     if feed_result.skipped_not_reading:
         lines.append(f"  not reading, skipped {feed_result.skipped_not_reading:>5}"
@@ -166,6 +173,19 @@ def detect_as_text(outcome, feed_result) -> str:
     if outcome.checked:
         lines.append(f"  invariants checked   {outcome.checked.get('invariants', 0):>5}"
                      f"   over {outcome.checked.get('entities', 0)} entities")
+
+    if getattr(feed_result, "peers_not_reading", None):
+        # A declared pairing that was not judged, said out loud. Silence here would
+        # be the worst available outcome: the operator declared a redundancy check,
+        # the report shows no disagreement, and the reason is that nothing was
+        # compared rather than that the readings matched.
+        lines.append("")
+        lines.append(f"  Redundancy not judged -- {len(feed_result.peers_not_reading)} "
+                     "declared pair(s) whose peer is not reading:")
+        for pair in feed_result.peers_not_reading[:5]:
+            lines.append(f"      {pair}")
+        if len(feed_result.peers_not_reading) > 5:
+            lines.append(f"      ... and {len(feed_result.peers_not_reading) - 5} more")
 
     warming = feed_result.warming_up
     if warming:

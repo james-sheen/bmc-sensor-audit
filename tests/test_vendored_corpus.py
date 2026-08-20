@@ -8,7 +8,7 @@ a claim in a public README is the same as unproven.
 The fixtures are now pinned to `0ada048303bb`. The first attempt was not, and within a
 day two of the nine had been renamed upstream and every corpus count had moved.
 
-`tests/fixtures/upstream/` now carries twelve of those files verbatim, chosen by
+`tests/fixtures/upstream/` now carries thirteen of those files verbatim, chosen by
 measuring the corpus for each documented property and taking the smallest file
 exhibiting it that also passes this project's hygiene check. The three
 `meta/bletchley/` files are there for a different reason: with the captured walk
@@ -49,8 +49,8 @@ def corpus():
 
 
 class TestTheFixturesArePresentAndLicensed:
-    def test_twelve_configurations_are_vendored(self):
-        assert len(list(UPSTREAM.rglob("*.json"))) == 12
+    def test_thirteen_configurations_are_vendored(self):
+        assert len(list(UPSTREAM.rglob("*.json"))) == 13
 
     def test_the_upstream_licence_travels_with_them(self):
         """Apache-2.0 requires the notice to accompany redistribution. Upstream
@@ -86,7 +86,7 @@ class TestTheFixturesArePresentAndLicensed:
 
 class TestTheDocumentedFindingsReproduce:
     def test_every_file_is_read_and_none_is_unreadable(self, corpus):
-        assert corpus.files_read == 12
+        assert corpus.files_read == 13
         assert corpus.unreadable == [], corpus.unreadable
         assert len(corpus.sensors) > 0
 
@@ -119,29 +119,32 @@ class TestTheDocumentedFindingsReproduce:
         assert len({s.label for s in hsc}) == len(hsc), \
             "rails collapsed together; a labelled entry is several sensors"
 
-    def test_the_labels_array_is_read_only_to_detect_the_channel_overlap(self, corpus):
-        """The replacement for a lead that has now been answered.
+    def test_a_rail_declared_only_by_labels_is_declared(self, corpus):
+        """The lead that was closed too early, reopened and answered properly.
 
-        The lead read: *this parser never consults an entry's `Labels` array, and
-        a sensor declared through `Labels` alone would be invisible to it*. Half
-        of that is still true and half is not, and the difference is the point.
+        The report read: *this parser never consults an entry's `Labels` array,
+        and a sensor declared through `Labels` alone would be invisible to it*.
+        The previous version of this test agreed with the second half and pinned
+        it -- *the original open question survives untouched* -- which converted a
+        correct outside finding into documented behaviour.
 
-        `Labels` is now read, for exactly one purpose: an entry that carries both
-        a `Labels` array and several `Name<n>` channels is ambiguous, because the
-        list can select which channels exist at all, and the resolution belongs to
-        the device class rather than to this file. That case is reported.
-
-        Expansion into rails is still driven only by per-threshold `Label`. So the
-        original open question survives untouched: a sensor declared through
-        `Labels` alone, with no per-rail thresholds, is still invisible here.
+        It was a false clean, in the one direction that matters. Nothing expected
+        those rails, so their absence could never be reported.
         """
-        delta = [s for s in corpus.sensors
-                 if s.source.endswith("awf2dc3200w_psu.json")]
-        assert delta, "the ignored-Labels example declares nothing at all"
-        assert not any(s.label for s in delta), \
-            "reading `Labels` has turned into rail expansion; that is a bigger " \
-            "change than the channel fix and needs its own measurement"
+        rails = [s for s in corpus.sensors if s.source.endswith("mtjade.json")
+                 and s.display_name in ("PSU0_PINPUT", "PSU0_POUTPUT")]
+        assert len(rails) == 2, (
+            "the Mt.Jade PSU declares pin and pout1 in its `Labels` array with a "
+            "threshold on neither; both should be declared")
+        assert all(not s.thresholds for s in rails), (
+            "these two are the specimen precisely because nothing bounds them; if "
+            "they grew thresholds the test stops covering the case")
 
+    def test_the_labels_and_channels_overlap_is_still_reported(self, corpus):
+        """The other half of the rule, unchanged. An entry carrying both a
+        `Labels` array and several `Name<n>` channels is ambiguous -- the list can
+        select which channels exist at all -- so only the primary is counted and
+        the ambiguity is reported rather than resolved by guess."""
         overlapping = [a for a in corpus.anomalies
                        if a.kind == "ambiguous_channel_naming"]
         assert overlapping, \
@@ -183,11 +186,26 @@ class TestTheDocumentedFindingsReproduce:
                         continue
                     thresholds = [t for t in entry.get("Thresholds") or []
                                   if isinstance(t, dict)]
-                    per_rail = any(t.get("Label") for t in thresholds)
-                    # A rail-addressed entry, or one where rails and channels
-                    # overlap, contributes its first name only.
-                    if per_rail or (entry.get("Labels") and len(channels) > 1):
+                    # The rail set, derived the way the reader now derives it: from
+                    # the `Labels` array that DECLARES it, plus any rail a threshold
+                    # names that the array omits.
+                    rails = [str(x) for x in (entry.get("Labels") or [])
+                             if isinstance(x, (str, int))]
+                    rails += [str(t["Label"]) for t in thresholds
+                              if t.get("Label") and str(t["Label"]) not in rails]
+                    if rails and len(channels) > 1:
+                        # Rails and channels overlapping is ambiguous; the entry
+                        # contributes its first name only.
                         expected.add(channels[0])
+                    elif rails:
+                        # One sensor per rail. A rail carrying `<label>_Name` takes
+                        # that name; the rest keep the entry's name and are told
+                        # apart by their label.
+                        for rail in rails:
+                            override = entry.get(f"{rail}_Name")
+                            expected.add(str(override)
+                                         if isinstance(override, str) and override
+                                         else channels[0])
                     else:
                         expected.update(channels)
 
@@ -298,10 +316,22 @@ class TestTheEndToEndDiffReproducesFromAClone:
         return compare(declaration, walk)
 
     def test_the_diff_matches_what_the_live_run_produced(self, report):
+        """`declared_absent` moved 25 -> 58, and the move is a correction.
+
+        The 25 was measured with a reader that took an entry's rail set from its
+        thresholds instead of from its `Labels` array. Bletchley's hot-swap
+        controllers and INA230 current monitors declare `pin`, `vin`, `vout1`,
+        `iout1`, `power1` and friends with a threshold on none of them, so 33
+        declared rails were invisible -- and QEMU emulates none of those parts, so
+        every one of them really is absent from the capture.
+
+        The old number was not a different answer to this question. It was this
+        question asked about a smaller declaration than the file actually makes.
+        """
         from collections import Counter
         kinds = Counter(f.kind for f in report.findings)
         assert kinds["matched_inexactly"] == 28
-        assert kinds["declared_absent"] == 25
+        assert kinds["declared_absent"] == 58
         assert report.regressions, "a partial emulation should still report absences"
 
     def test_nothing_the_machine_reported_is_called_undeclared(self, report):

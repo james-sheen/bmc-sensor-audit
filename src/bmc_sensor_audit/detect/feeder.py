@@ -33,10 +33,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
-from .generator import READING, READING_LOW, Manifest
+from .generator import READING, Manifest, peer_property
 
 __all__ = ["FeedResult", "DetectOutcome", "feed", "unmapped_observations",
-           "evaluate", "STUCK_AT_SAMPLE_FLOOR"]
+           "evaluate", "STUCK_AT_SAMPLE_FLOOR", "ENVELOPE_SCHEMA_VERSION"]
+
+# The wire contract this build parses. Versioned separately from the package by the
+# engine, deliberately: `meta.schema_version` describes the ENVELOPE shape and moves
+# only when that shape changes, so it is not the release number and must not be
+# compared against one.
+#
+# Everything this module knows is keyed to that shape -- `findings` vs `not_checked`,
+# the `problem_type` split, `reason` as the decline vocabulary. If the shape moves,
+# each of those reads plausibly and wrongly, which is worse than failing: a decline
+# the engine renamed lands in `unclassified` and a finding it restructured is quietly
+# unattributable. So an unexpected version stops the run rather than degrading it.
+ENVELOPE_SCHEMA_VERSION = 1
 
 # Measured on 0.1.6: a constant series declines below about ten samples and produces a
 # STABILITY finding at ten or more. See docs/stage2/s1-threshold-granularity.md for the
@@ -57,6 +69,14 @@ class FeedResult:
     skipped_not_reading: int = 0
     skipped_not_modelled: int = 0
     samples: dict[str, int] = field(default_factory=dict)
+    # Declared redundant pairs where the peer is not currently reading, so agreement
+    # was not judged. Reported rather than dropped: a pairing that silently stops
+    # being checked looks exactly like a pairing that agrees.
+    peers_not_reading: list[str] = field(default_factory=list)
+    # The same fact keyed by entity type, which is what a decline names. Kept beside
+    # the human-readable list rather than parsed back out of it -- re-deriving one
+    # from the other means a display change silently alters a gate decision.
+    entities_missing_peers: set[str] = field(default_factory=set)
 
     @property
     def warming_up(self) -> dict[str, int]:
@@ -76,6 +96,7 @@ class DetectOutcome:
     unmapped: list[str] = field(default_factory=list)
     checked: dict = field(default_factory=dict)
     strict: bool = False
+    schema_mismatch: str | None = None
 
     @property
     def exit_code(self) -> int:
@@ -114,6 +135,13 @@ def feed(session: Any, manifest: Manifest,
                 float(match.live.reading))
 
     current = reports[-1]
+    # Current readings by declared name, so a redundant peer's value can be attached
+    # to the entity that declares the agreement. Built from the same `is_reading`
+    # test the feed loop applies, rather than from `history`, which carries readings
+    # from walks where the sensor may since have stopped.
+    readings = {m.declared.display_name: float(m.live.reading)
+                for m in current.matches
+                if m.live.is_reading and m.live.reading is not None}
     for match in current.matches:
         name = match.declared.display_name
         entity_type = manifest.type_for(name)
@@ -131,18 +159,38 @@ def feed(session: Any, manifest: Manifest,
 
         value = float(match.live.reading)
         properties = {READING: value}
+
+        # A declared redundant peer's reading, carried on this entity so CONSISTENCY
+        # has both numbers. Fed only when the peer is itself present and reading:
+        # otherwise the engine declines `missing_property`, which for this axiom
+        # means *the peer is not there* -- a fact Stage 1 has already reported
+        # precisely, and re-deriving it here as a mapping bug would be wrong.
         sensor = next((s for s in manifest.sensors if s.entity_type == entity_type), None)
-        if sensor is not None and sensor.has_lower:
-            properties[READING_LOW] = -value
+        carried = () if sensor is None else sensor.agrees_with + sensor.flow_outputs
+        for peer in carried:
+            peer_value = readings.get(peer)
+            if peer_value is None:
+                result.peers_not_reading.append(f"{name} -> {peer}")
+                result.entities_missing_peers.add(entity_type)
+                continue
+            properties[peer_property(peer)] = peer_value
 
         session.add_entity(entity_type, entity_type, properties=properties)
         series = history.get(name, [])
         if series:
             session.add_observations(entity_type, READING, series,
                                      interval_seconds=60.0)
-            if sensor is not None and sensor.has_lower:
-                session.add_observations(entity_type, READING_LOW,
-                                         [-v for v in series], interval_seconds=60.0)
+        # CONSERVATION reads a SERIES, not a current value -- fed only the properties
+        # it declines `insufficient_samples` with *no observations of input property*,
+        # which reads like a warm-up and never clears. CONSISTENCY needs only the
+        # current value, so this is redundant for a pairing and harmless: the model
+        # declares the property either way, so nothing goes unread.
+        if sensor is not None and sensor.flow_outputs:
+            for peer in sensor.flow_outputs:
+                peer_series = history.get(peer, [])
+                if peer_series:
+                    session.add_observations(entity_type, peer_property(peer),
+                                             peer_series, interval_seconds=60.0)
         result.samples[name] = len(series)
         result.fed += 1
     return result
@@ -165,6 +213,32 @@ def unmapped_observations(describe: dict) -> list[dict]:
     return list(top or nested or [])
 
 
+def schema_mismatch(envelope: dict) -> str | None:
+    """Say why this envelope cannot be trusted, or nothing if it can.
+
+    Three outcomes rather than two, because *absent* and *different* are not the same
+    fact. A version this build does not know is a wire contract that moved. An ABSENT
+    version is an engine from before the field existed -- 0.1.6 and earlier shipped
+    the same envelope shape without stamping it -- and the pin still admits those, so
+    treating a missing stamp as a mismatch would refuse an engine this project
+    supports.
+
+    Reading it as `!= 1` alone would have collapsed both into one message and blamed
+    the wrong thing for whichever it was.
+    """
+    meta = envelope.get("meta")
+    if not isinstance(meta, dict) or "schema_version" not in meta:
+        return None
+    version = meta.get("schema_version")
+    if version == ENVELOPE_SCHEMA_VERSION:
+        return None
+    return (f"the engine stamped this envelope schema_version {version!r}; this build "
+            f"parses {ENVELOPE_SCHEMA_VERSION}. Every reading below -- findings, "
+            f"declines, the sensor a finding names -- is keyed to the shape that "
+            f"version describes, so the run is reported as incomplete rather than "
+            f"interpreted against a contract that moved")
+
+
 def _describe_decline(decline: dict) -> str:
     entity = decline.get("entity_id", "?")
     axiom = decline.get("axiom", "?")
@@ -173,11 +247,35 @@ def _describe_decline(decline: dict) -> str:
     return f"{entity} [{axiom}] {reason}" + (f" -- {detail}" if detail else "")
 
 
+def _is_expected_peer_decline(decline: dict, feed_result: Any) -> bool:
+    """Whether a `missing_property` decline is the peer Stage 1 already reported.
+
+    **The decline vocabulary is not one-dimensional, and reading it as though it
+    were is a real defect this build had.** `missing_property` under BOUNDEDNESS
+    means a value Stage 1 called present never reached the model -- a mapping bug,
+    and the reason that reason fails the gate. Under CONSISTENCY it means the peer of
+    a declared redundant pair is not carrying a reading, which the feeder already
+    knows because it chose not to feed it, and which Stage 1 has already reported
+    precisely as absence.
+
+    Classified on `(axiom, reason)` AND cross-checked against what the feeder
+    actually did, so a CONSISTENCY `missing_property` for a peer that WAS fed still
+    fails the gate -- that one really is a mapping bug. Bucketing on `reason` alone
+    failed the gate twice for one absent sensor, the second time asserting the name
+    mapping was wrong when it was not.
+    """
+    if decline.get("axiom") != "CONSISTENCY":
+        return False
+    unfed = getattr(feed_result, "entities_missing_peers", None) or set()
+    return str(decline.get("entity_id") or "") in unfed
+
+
 def evaluate(envelope: dict, describe: dict, manifest: Manifest, *,
-             strict_declines: bool = False) -> DetectOutcome:
+             strict_declines: bool = False, feed_result: Any = None) -> DetectOutcome:
     """Turn one engine envelope into a verdict a pipeline can act on."""
     outcome = DetectOutcome(checked=envelope.get("checked") or {},
                             strict=strict_declines)
+    outcome.schema_mismatch = schema_mismatch(envelope)
 
     for finding in envelope.get("findings") or []:
         outcome.findings.append(manifest.translate_finding(finding))
@@ -187,7 +285,13 @@ def evaluate(envelope: dict, describe: dict, manifest: Manifest, *,
     for decline in declines:
         reason = decline.get("reason")
         rendered = _describe_decline(decline)
-        if reason in _CORE_CASE_REASONS:
+        if reason in _CORE_CASE_REASONS and _is_expected_peer_decline(decline,
+                                                                     feed_result):
+            # A declared redundant peer that is not reading. Stage 1 has already
+            # reported it as absent, precisely; counting it again here would fail the
+            # gate twice for one fact and say the mapping was wrong, which it is not.
+            outcome.data_declines.append(rendered)
+        elif reason in _CORE_CASE_REASONS:
             # Stage 1 said this sensor was reading. If its value did not reach the
             # model, the mapping is wrong, and a mapping error is invisible unless
             # something fails on it.
@@ -200,9 +304,27 @@ def evaluate(envelope: dict, describe: dict, manifest: Manifest, *,
             # confidence, which is worse than saying so.
             outcome.unclassified_declines.append(rendered)
 
+    # Peer properties the model DOES declare, inside a `conservation` or
+    # `consistency` block. The engine's unconsumed-observation report is built from
+    # declared INDICATORS, so a peer reading fed for a cross-signal check arrives
+    # there as `undeclared_property` -- and `unmapped` fails the gate, so a healthy
+    # board with a declared flow would have exited 1 on every run.
+    #
+    # Filtered by (entity, property) pair rather than by prefix: a stray `peer_`
+    # property on an entity that declares no such peer is still a mapping bug and
+    # still reported.
+    declared_peers = {
+        (sensor.entity_type, peer_property(peer))
+        for sensor in manifest.sensors
+        for peer in sensor.agrees_with + sensor.flow_outputs}
+
     for unmapped in unmapped_observations(describe):
+        entity = unmapped.get("entity_id", "?")
+        prop = unmapped.get("property", "?")
+        if (entity, prop) in declared_peers:
+            continue
         outcome.unmapped.append(
-            f"{unmapped.get('entity_id', '?')}.{unmapped.get('property', '?')} "
+            f"{entity}.{prop} "
             f"({unmapped.get('observations', '?')} observations, "
             f"{unmapped.get('reason', 'unread')})")
 

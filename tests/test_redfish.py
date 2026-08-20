@@ -425,3 +425,50 @@ class TestTheDeprecatedShapeAgainstRealFirmware:
                      "redfish-allow-deprecated-power-thermal"):
             assert fact in provenance, f"the provenance no longer records {fact!r}"
         assert "what this is not" in provenance.lower()
+
+
+class TestWalkLatencyIsRecorded:
+    """One field, taken where every fetch already passes through.
+
+    A BMC whose Redfish stack is degrading answers more slowly long before it
+    answers wrongly, and nothing else in this tool can see that. The walker already
+    touches every endpoint, so the measurement costs a clock read.
+    """
+
+    def test_every_fetch_is_timed(self):
+        walk = _walk(_populated("sensors"))
+        assert walk.latencies, "no fetch was timed"
+        assert all(t >= 0 for _, t in walk.latencies), "a negative interval"
+        assert all(isinstance(path, str) and path for path, _ in walk.latencies)
+        assert any("Chassis" in path for path, _ in walk.latencies)
+
+    def test_a_reused_client_does_not_carry_the_previous_walk(self):
+        """The measurement bug that reads as a BMC getting slower while nothing
+        changed: a second walk inheriting the first one\'s timings would double the
+        fetch count and drag the tail."""
+        with serve(_populated("sensors")) as url:
+            client = RedfishClient(url)
+            first = walk_chassis(client)
+            second = walk_chassis(client)
+        assert len(second.latencies) == len(first.latencies)
+
+    def test_latency_survives_a_round_trip_through_a_capture(self):
+        walk = _walk(_populated("sensors"))
+        rehydrated = walk_from_dict(walk.to_dict())
+        assert len(rehydrated.latencies) == len(walk.latencies)
+        assert rehydrated.latencies[0][0] == walk.latencies[0][0]
+
+    def test_a_capture_taken_before_this_existed_reads_as_ABSENT_not_zero(self):
+        """Absent and zero are different facts. A walk with no `latencies` key is
+        one nobody measured; reading it as a list of zeroes would report the
+        fastest BMC ever built -- and every vendored fixture predates this field."""
+        payload = _walk(_populated("sensors")).to_dict()
+        del payload["latencies"]
+        assert walk_from_dict(payload).latencies == []
+
+    def test_the_vendored_capture_predates_this_and_is_read_without_complaint(self):
+        walk = walk_from_dict(json.loads(
+            (Path(__file__).resolve().parents[1]
+             / "tests" / "fixtures" / "walk_qemu_bletchley.json").read_text()))
+        assert walk.latencies == []
+        assert len(walk) == 28, "the capture itself should be unaffected"

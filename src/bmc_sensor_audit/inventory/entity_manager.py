@@ -164,6 +164,8 @@ class DeclaredSensor:
     source: str                # path of the config that declared it
     thresholds: tuple[Threshold, ...] = ()
     disabled_in_config: bool = False
+    part: str | None = None    # the physical device that declares it
+    channel: int | None = None # hwmon channel within that device, when it has several
 
     @property
     def key(self) -> tuple[str, str | None]:
@@ -375,6 +377,16 @@ def _read_entry(
         return
     primary = channels[0][1]
 
+    # Which physical device declared each sensor. **The part IS the `Exposes` entry**
+    # -- one entry is one chip, and every sensor this call yields comes off it -- so
+    # the identity is derived from the entry rather than reconstructed from `Bus` and
+    # `Address`. Reconstructing it would be a guess wherever those keys are absent,
+    # which is most of the corpus, and a wrong grouping is worse than none: two
+    # TMP421s at 0x4C and 0x4D on one board would merge into a single four-channel
+    # part, and anything reasoning about "the other channel of this part" would pair
+    # sensors that share no silicon.
+    part = f"{Path(source).name}#{record or '-'}#{entry.get('Type') or '-'}#{primary}"
+
     for key in unrecognised:
         anomalies.append(Anomaly(
             "unrecognised_name_key", source,
@@ -387,10 +399,28 @@ def _read_entry(
     disabled = str(entry.get("Status", "")).lower() == "disabled"
     grouped = _read_thresholds(entry, primary, source, anomalies)
 
-    labels = [k for k in grouped if k is not None]
-    # `Labels` can be present without any threshold carrying one, and it still
-    # means the part is addressed per rail.
-    label_driven = bool(labels) or bool(entry.get("Labels"))
+    # **The rail set comes from `Labels`, which declares it, and not from the
+    # thresholds, which are a proxy for it.**
+    #
+    # This read the thresholds: `[k for k in grouped if k is not None]`. A rail is
+    # only ever visible that way if somebody bounded it, and most are not -- across
+    # the pinned corpus, `Labels` arrays declare 149 rails and 34 carry a threshold.
+    # The other 115 were not excluded with a reason; they were never constructed, so
+    # nothing expected them, and a rail nothing expects can never be reported absent.
+    # That is a false clean, in the one direction this tool exists to prevent.
+    #
+    # The declaration was already being consulted on the line below -- as a boolean,
+    # to decide that the part is rail-addressed, while the set itself kept coming
+    # from the proxy.
+    declared_labels = [str(x) for x in (entry.get("Labels") or [])
+                       if isinstance(x, (str, int))]
+    thresholded = [k for k in grouped if k is not None]
+    labels = list(declared_labels)
+    # A threshold naming a rail the `Labels` array omits. Kept rather than dropped:
+    # the entry says the rail exists by bounding it, and the two disagreeing is a
+    # fact about the configuration, not a reason to believe the shorter list.
+    labels += [k for k in thresholded if k not in labels]
+    label_driven = bool(labels)
 
     if len(channels) > 1 and label_driven:
         anomalies.append(Anomaly(
@@ -402,22 +432,46 @@ def _read_entry(
             f"counted; any further channel is neither declared nor diffed",
             primary))
 
-    if labels:
+    ambiguous = len(channels) > 1 and label_driven
+
+    if labels and not ambiguous:
         # A labelled entry declares one sensor per rail. Any unlabelled
         # thresholds on the same entry apply to all of them.
+        #
+        # `not ambiguous` keeps the existing rule for an entry that is BOTH
+        # multi-channel and rail-addressed: which rails exist is then device-class
+        # specific and cannot be settled from this file, so only the primary is
+        # counted and the anomaly above says so. Reading `Labels` for the rail set
+        # made this branch start swallowing that case, which declared the SI7020's
+        # temperature and humidity twice each.
         shared = tuple(grouped.get(None, ()))
         for label in labels:
+            # `<label>_Name` is how an entry names a rail, and it is the name the
+            # machine will report. Declaring `PSU0:pin` where the BMC publishes
+            # `PSU0_PINPUT` produces two wrong findings from one sensor -- declared
+            # and absent, plus present and undeclared -- so the override is read
+            # rather than treated as decoration.
+            override = entry.get(f"{label}_Name")
+            named = isinstance(override, str) and bool(override)
+            # With an override the rail carries its own whole name and the label is
+            # spent; without one it keeps the entry's name and `display_name`
+            # composes `NAME:LABEL`. Setting both produced `P12V_AUX_HSC:iout1:iout1`
+            # -- a name matching no live sensor, so every rail would have read as
+            # declared-and-absent.
             yield DeclaredSensor(
-                name=primary, type=sensor_type, label=label, record=record,
-                source=source, thresholds=tuple(grouped[label]) + shared,
-                disabled_in_config=disabled)
+                name=str(override) if named else primary,
+                type=sensor_type,
+                label=None if named else label,
+                record=record, source=source,
+                thresholds=tuple(grouped.get(label, ())) + shared,
+                disabled_in_config=disabled, part=part)
         return
 
-    if len(channels) > 1 and label_driven:
+    if ambiguous:
         yield DeclaredSensor(
             name=primary, type=sensor_type, label=None, record=record,
             source=source, thresholds=tuple(grouped.get(None, ())),
-            disabled_in_config=disabled)
+            disabled_in_config=disabled, part=part)
         return
 
     # One sensor per channel. A threshold carrying `Index` guards that channel
@@ -439,7 +493,8 @@ def _read_entry(
             t for t in unlabelled if t.index is None or t.index == index)
         yield DeclaredSensor(
             name=name, type=sensor_type, label=None, record=record, source=source,
-            thresholds=thresholds, disabled_in_config=disabled)
+            thresholds=thresholds, disabled_in_config=disabled, part=part,
+            channel=index if len(channels) > 1 else None)
 
 
 def parse_config_text(text: str, source: str = "<text>") -> Declaration:

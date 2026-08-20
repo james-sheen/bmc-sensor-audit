@@ -240,16 +240,54 @@ def test_channels_and_rails_together_are_reported_not_guessed():
     assert "NIC Temp Remote" in declaration.anomalies[0].detail
 
 
-def test_a_rail_expansion_is_still_driven_only_by_threshold_labels():
-    """The narrower half of the same rule: reading `Labels` to detect the overlap
-    above must not turn it into an expansion key. An entry carrying `Labels` and
-    nothing per-rail still declares one sensor, not one per rail."""
+def test_a_rail_declared_only_by_labels_is_declared():
+    """`Labels` declares the rail set. Thresholds are a proxy for it.
+
+    This test asserted the opposite -- that an entry carrying `Labels` and no
+    per-rail threshold declares ONE sensor -- and it was wrong in the direction
+    that matters. An outside reader had reported exactly this: *a sensor declared
+    through `Labels` alone would be invisible to this parser*. It was, and pinning
+    the behaviour turned the report into a documented feature.
+
+    Across the pinned corpus, `Labels` arrays declare 149 rails and 34 carry a
+    threshold. The other 115 were never constructed, so nothing expected them, and
+    a rail nothing expects can never be reported absent -- a false clean.
+    """
     cfg = {"Exposes": [{"Name": "PSU", "Type": "pmbus",
                         "Labels": ["vin", "iout1", "pin"]}]}
     declaration = parse_config_text(json.dumps(cfg))
-    assert [s.name for s in declaration.sensors] == ["PSU"]
-    assert declaration.sensors[0].label is None
+    assert sorted(s.display_name for s in declaration.sensors) == [
+        "PSU:iout1", "PSU:pin", "PSU:vin"]
     assert declaration.anomalies == []
+
+
+def test_a_rail_takes_its_own_name_when_the_entry_gives_it_one():
+    """`<label>_Name` is the name the machine will publish. Declaring `PSU0:pin`
+    where the BMC reports `PSU0_PINPUT` produces two wrong findings from one
+    sensor: declared-and-absent, and present-and-undeclared."""
+    cfg = {"Exposes": [{"Name": "PSU0", "Type": "pmbus",
+                        "Labels": ["pin", "pout1"],
+                        "pin_Name": "PSU0_PINPUT",
+                        "pout1_Name": "PSU0_POUTPUT"}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert sorted(s.display_name for s in declaration.sensors) == [
+        "PSU0_PINPUT", "PSU0_POUTPUT"]
+    assert all(s.label is None for s in declaration.sensors), (
+        "a rail carrying its own name has spent its label; leaving both set makes "
+        "display_name compose PSU0_PINPUT:pin, which matches no live sensor")
+
+
+def test_a_threshold_naming_a_rail_the_labels_array_omits_is_kept():
+    """The two sources disagreeing is a fact about the configuration, not a reason
+    to believe the shorter list."""
+    cfg = {"Exposes": [{"Name": "PSU", "Type": "pmbus", "Labels": ["vin"],
+                        "Thresholds": [{"Name": "upper critical",
+                                        "Direction": "greater than",
+                                        "Label": "iout1", "Value": 5,
+                                        "Severity": 1}]}]}
+    declaration = parse_config_text(json.dumps(cfg))
+    assert sorted(s.display_name for s in declaration.sensors) == [
+        "PSU:iout1", "PSU:vin"]
 
 
 def test_two_channels_sharing_a_name_are_reported():

@@ -22,9 +22,11 @@ locally — CI installs the engine, which is where this is a gate rather than a 
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import math
 import pathlib
 import re
+import tempfile
 
 import pytest
 
@@ -254,17 +256,24 @@ class TestTheGeneratedModelIsAcceptedWhole:
         assert unreachable == [], f"unreachable declarations: {unreachable}"
 
     def test_a_reading_below_its_lower_bound_is_found_and_translated(self, generated):
-        """End to end, on real vendored thresholds: the negation transform fires, and
-        the manifest turns the engine's inverted wording into what a person measured."""
-        from bmc_sensor_audit.detect.generator import READING, READING_LOW
+        """End to end, on real vendored thresholds: the engine's native floor fires,
+        and the manifest names the sensor on the board rather than the sanitised type.
+
+        This is the test that has to keep passing across the retirement of the
+        negation transform, because it asserts the OUTCOME -- a fan reading below its
+        declared floor is reported as below it -- and never named the mechanism.
+        """
+        from bmc_sensor_audit.detect.generator import READING
         _, manifest, session = generated
         sensor = next(s for s in manifest.sensors if s.lower[1] is not None)
         below = sensor.lower[1] - 0.1
         session.add_entity(sensor.entity_type, sensor.entity_type,
-                           properties={READING: below, READING_LOW: -below})
+                           properties={READING: below})
         findings = [f for f in (check(session).to_dict().get("findings") or [])
                     if f.get("entity_id") == sensor.entity_type]
         assert findings, f"{sensor.declared_name} below {sensor.lower[1]} produced nothing"
+        assert findings[0]["problem_type"].startswith("below_"), (
+            f"expected a floor-side finding, got {findings[0]['problem_type']}")
         translated = manifest.translate_finding(findings[0])
         assert "BELOW" in translated and sensor.declared_name in translated, translated
 
@@ -448,8 +457,22 @@ class TestTheVendoredCaptureRunsTheWholeStage2Path:
         assert outcome.unclassified_declines == []
 
     def test_the_denominator_is_the_one_the_capture_supports(self, stage2):
+        """56 is 28 entities times two invariants -- BOUNDEDNESS and STABILITY on the
+        one indicator each sensor now has.
+
+        It was 80 while lower bounds rode on a mirrored `reading_low` indicator: a
+        sensor declaring both a floor and a ceiling carried a second BOUNDEDNESS
+        invariant that existed because the engine could not test downward, not
+        because the board raised another question. Retiring the transform took 24
+        invariants out of the denominator, and they were the transform's own
+        overhead being counted as coverage.
+
+        Derived rather than typed, so it stays true when the capture grows a sensor
+        and false if an entity silently stops being modelled.
+        """
         _, _, outcome = stage2
-        assert outcome.checked == {"invariants": 80, "entities": 28}
+        assert outcome.checked == {"invariants": outcome.checked["entities"] * 2,
+                                   "entities": 28}
 
     def test_one_walk_is_one_sample_and_liveness_says_so(self, stage2):
         """The exit code comes from bound breaches, not from liveness: every sensor is
@@ -674,3 +697,333 @@ class TestStuckAtAgainstRealFirmware:
         assert driven in self._stuck_at(outcome)
         assert "in window" in next(f for f in outcome.findings
                                    if f.startswith(driven))
+
+
+class TestRedundantSignalDisagreementEndToEnd:
+    """The failure class nothing previously wired could see: a sensor that is
+    present, reading, moving, and wrong.
+
+    BOUNDEDNESS catches a reading outside its bounds and STABILITY catches one that
+    has stopped moving. A drifted sensor is inside its bounds and still varying, so
+    it passes both. The only thing that can catch it is a second reading of the same
+    quantity, and the acceptance rule for this map says the class has to be injected
+    and demonstrated rather than argued -- so this drives a declared pair apart and
+    asserts the engine says so, in the operator's own names.
+    """
+
+    TOLERANCE = 0.10
+
+    @pytest.fixture
+    def paired(self, tmp_path):
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.detect.supplemental import load_supplemental
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        path = tmp_path / "supplemental.json"
+        path.write_text(json.dumps({
+            "format": "bmc-sensor-audit/supplemental/1",
+            "provenance": "test fixture; not a hardware claim",
+            "redundant_groups": [{
+                "sensors": ["MB_U73_THERM_LOCAL", "MB_U73_THERM_REMOTE"],
+                "tolerance": self.TOLERANCE,
+                "basis": "test fixture: both channels driven to one point, so the "
+                         "pair is redundant BY CONSTRUCTION here. Not a claim that "
+                         "a TMP421's die and remote diode agree on real hardware -- "
+                         "they do not, which is why this file has to exist"}]}))
+        upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
+            "fixtures" / "upstream"
+        declaration = load_declaration([str(upstream)])
+        model, manifest = generate(declaration,
+                                   supplemental=load_supplemental(path))
+        return declaration, model, manifest
+
+    def _run(self, paired, readings):
+        from bmc_sensor_audit.detect.feeder import evaluate, feed
+        from bmc_sensor_audit.inventory.diff import compare
+        from bmc_sensor_audit.inventory.redfish import walk_from_dict
+        declaration, model, manifest = paired
+        walk = walk_from_dict({
+            "format": "bmc-sensor-audit/walk/1",
+            "chassis": ["/redfish/v1/Chassis/1"], "shapes_seen": ["sensors"],
+            "errors": [],
+            "sensors": [{"name": name, "reading": value, "state": "Enabled",
+                         "health": "OK", "thresholds": {},
+                         "path": f"/redfish/v1/Chassis/1/Sensors/s{i}"}
+                        for i, (name, value) in enumerate(readings)]})
+        report = compare(declaration, walk)
+        handle = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+        yaml.safe_dump(model, handle)
+        handle.close()
+        session = EngineSession()
+        session.load_model(handle.name)
+        result = feed(session, manifest, [report])
+        outcome = evaluate(check(session).to_dict(),
+                           model_describe(session).to_dict(), manifest,
+                           feed_result=result)
+        return result, outcome
+
+    def _disagreements(self, outcome):
+        return [f for f in outcome.findings if "redundant" in f]
+
+    def test_a_pair_within_tolerance_is_clean(self, paired):
+        """The control. Both channels inside the band and inside the tolerance."""
+        _, outcome = self._run(paired, [("MB_U73_THERM_LOCAL", 30.0),
+                                        ("MB_U73_THERM_REMOTE", 30.4)])
+        assert self._disagreements(outcome) == []
+
+    def test_a_drifted_channel_is_caught(self, paired):
+        """The injection. 30.0 against 41.0 is 27% divergence on a 10% tolerance --
+        and BOTH readings sit inside the declared 0..50 band and neither is frozen,
+        so every other wired axiom passes them."""
+        _, outcome = self._run(paired, [("MB_U73_THERM_LOCAL", 30.0),
+                                        ("MB_U73_THERM_REMOTE", 41.0)])
+        found = self._disagreements(outcome)
+        assert len(found) == 1, outcome.findings
+        assert outcome.exit_code == 1
+
+    def test_the_finding_names_both_sensors_as_the_board_names_them(self, paired):
+        """The engine names the sanitised entity type and the invented peer property
+        key. A finding whose entire value is *these two disagree* has to name two
+        things an operator can find on the hardware."""
+        _, outcome = self._run(paired, [("MB_U73_THERM_LOCAL", 30.0),
+                                        ("MB_U73_THERM_REMOTE", 41.0)])
+        text = self._disagreements(outcome)[0]
+        assert "MB_U73_THERM_LOCAL" in text
+        assert "MB_U73_THERM_REMOTE" in text
+        assert "peer_" not in text
+
+    def test_the_other_axioms_really_do_pass_this_reading(self, paired):
+        """Non-vacuity for the claim above, and the reason this axiom earns its
+        place: if 41.0 broke a bound or read as frozen, the pair would be redundant
+        evidence rather than the only evidence."""
+        _, outcome = self._run(paired, [("MB_U73_THERM_LOCAL", 30.0),
+                                        ("MB_U73_THERM_REMOTE", 41.0)])
+        assert [f for f in outcome.findings if "redundant" not in f] == []
+
+    def test_a_peer_that_stopped_reading_is_reported_not_silently_skipped(self, paired):
+        """A pairing that quietly stops being checked looks exactly like a pairing
+        that agrees."""
+        result, outcome = self._run(paired, [("MB_U73_THERM_LOCAL", 30.0)])
+        assert result.peers_not_reading == [
+            "MB_U73_THERM_LOCAL -> MB_U73_THERM_REMOTE"]
+        assert self._disagreements(outcome) == []
+
+    def test_an_absent_peer_does_not_fail_the_gate_as_a_mapping_bug(self, paired):
+        """Stage 1 already reports that sensor as absent, precisely. Counting the
+        engine's CONSISTENCY `missing_property` as a core-case decline failed the
+        gate twice for one fact and asserted the name mapping was wrong."""
+        _, outcome = self._run(paired, [("MB_U73_THERM_LOCAL", 30.0)])
+        assert outcome.core_case_declines == []
+        assert any("CONSISTENCY" in d for d in outcome.data_declines)
+
+
+class TestConservationEndToEnd:
+    """PSU efficiency collapse, on the real vendored Mt.Jade declaration.
+
+    The map that asked for this recorded a material gap -- *the vendored configs
+    contain no PSU power-pair declaration* -- and the gap was really two facts. The
+    Delta PSU already vendored DOES declare `pin` and `pout1`, but its names are
+    templated, so nothing can ever match them; and the reader was not constructing
+    rails declared by `Labels` at all. `ampere/mtjade.json` was vendored at the
+    pin for a pair that is neither templated nor invisible.
+    """
+
+    MARGIN = 0.15
+
+    @pytest.fixture
+    def flowed(self, tmp_path):
+        from bmc_sensor_audit.detect.generator import generate
+        from bmc_sensor_audit.detect.supplemental import load_supplemental
+        from bmc_sensor_audit.inventory.entity_manager import load_declaration
+        path = tmp_path / "supplemental.json"
+        path.write_text(json.dumps({
+            "format": "bmc-sensor-audit/supplemental/1",
+            "provenance": "test fixture; the margin is not a datasheet figure",
+            "flows": [{"input": "PSU0_PINPUT", "outputs": ["PSU0_POUTPUT"],
+                       "loss_margin": self.MARGIN,
+                       "basis": "test fixture: a stand-in for the efficiency floor "
+                                "a real deployment would take off the PSU "
+                                "datasheet. The number is the operator's to supply "
+                                "and this one establishes nothing about Mt.Jade"}]}))
+        upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
+            "fixtures" / "upstream"
+        declaration = load_declaration([str(upstream)])
+        model, manifest = generate(declaration,
+                                   supplemental=load_supplemental(path))
+        return declaration, model, manifest
+
+    def _run(self, flowed, pin_watts, pout_watts, samples=12):
+        from bmc_sensor_audit.detect.feeder import evaluate, feed
+        from bmc_sensor_audit.inventory.diff import compare
+        from bmc_sensor_audit.inventory.redfish import walk_from_dict
+        declaration, model, manifest = flowed
+        reports = []
+        for step in range(samples):
+            walk = walk_from_dict({
+                "format": "bmc-sensor-audit/walk/1",
+                "chassis": ["/redfish/v1/Chassis/1"], "shapes_seen": ["sensors"],
+                "errors": [],
+                "sensors": [{"name": name, "reading": value + step * 0.01,
+                             "state": "Enabled", "health": "OK", "thresholds": {},
+                             "path": f"/redfish/v1/Chassis/1/Sensors/s{i}"}
+                            for i, (name, value) in enumerate(
+                                [("PSU0_PINPUT", pin_watts),
+                                 ("PSU0_POUTPUT", pout_watts)])]})
+            reports.append(compare(declaration, walk))
+        handle = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+        yaml.safe_dump(model, handle)
+        handle.close()
+        session = EngineSession()
+        session.load_model(handle.name)
+        result = feed(session, manifest, reports)
+        outcome = evaluate(check(session).to_dict(),
+                           model_describe(session).to_dict(), manifest,
+                           feed_result=result)
+        return result, outcome
+
+    def _imbalances(self, outcome):
+        return [f for f in outcome.findings if "imbalance" in f]
+
+    def test_a_psu_inside_its_loss_margin_is_clean(self, flowed):
+        """800 W in, 720 W out: a 10% loss against a 15% margin."""
+        _, outcome = self._run(flowed, 800.0, 720.0)
+        assert self._imbalances(outcome) == []
+
+    def test_an_efficiency_collapse_is_caught(self, flowed):
+        """800 W in, 500 W out. Neither reading is out of bounds -- neither has any
+        bound at all -- and neither is frozen, so this is invisible to everything
+        else this tool wires."""
+        _, outcome = self._run(flowed, 800.0, 500.0)
+        found = self._imbalances(outcome)
+        assert len(found) == 1, outcome.findings
+        assert "PSU0_PINPUT" in found[0]
+        assert outcome.exit_code == 1
+
+    def test_a_flow_reading_with_no_bounds_is_still_modelled(self, flowed):
+        """The ordinary rule excludes a sensor with nothing to bound against. Both
+        Mt.Jade power rails declare no threshold, so that rule would have dropped
+        exactly the readings the check needs and left it silently never running."""
+        _, model, manifest = flowed
+        assert manifest.type_for("PSU0_PINPUT") is not None
+        assert manifest.type_for("PSU0_POUTPUT") is not None
+
+    def test_boundedness_is_not_asked_of_an_unbounded_flow_reading(self, flowed):
+        """A modelled sensor with no threshold on either side would decline
+        `no_threshold` every pass -- a decline about the model, not the board."""
+        _, model, manifest = flowed
+        indicator = model["domain"]["indicators"][
+            manifest.type_for("PSU0_PINPUT")][0]
+        assert "BOUNDEDNESS" not in indicator["axioms"]
+        assert "CONSERVATION" in indicator["axioms"]
+        assert "STABILITY" in indicator["axioms"], (
+            "a flow reading that has frozen is still a dead sensor")
+
+    def test_the_peer_series_is_not_reported_as_an_unread_feed(self, flowed):
+        """CONSERVATION reads a series for each output, and the engine's
+        unconsumed-observation report is built from declared INDICATORS -- so the
+        peer arrives there as `undeclared_property`. `unmapped` fails the gate, so
+        a healthy board with a declared flow would have exited 1 every run."""
+        _, outcome = self._run(flowed, 800.0, 720.0)
+        assert outcome.unmapped == []
+        assert outcome.exit_code == 0
+
+    def test_a_genuinely_unread_property_is_still_reported(self, flowed):
+        """Non-vacuity for the filter above: it excludes peers this model declares,
+        by (entity, property) pair, and nothing else."""
+        from bmc_sensor_audit.detect.feeder import evaluate
+        _, _, manifest = flowed
+        entity = manifest.type_for("PSU0_PINPUT")
+        describe = {"unconsumed_observations": [
+            {"entity_id": entity, "property": "peer_SOMETHING_ELSE",
+             "observations": 4, "reason": "undeclared_property"}]}
+        outcome = evaluate({"meta": {"schema_version": 1}}, describe, manifest)
+        assert len(outcome.unmapped) == 1
+        assert "peer_SOMETHING_ELSE" in outcome.unmapped[0]
+
+
+class TestTheAttestationArtifact:
+    """A per-run record that survives the run, and admits what it does not cover.
+
+    The map listed `attest` as uncharacterized and said *probe first, wire second*.
+    Two facts came out of probing it, and both shape this artifact: it requires
+    `check()` to have run first and refuses honestly otherwise, and it is the only
+    surface that carries per-finding EVIDENCE -- `check()` renders a finding as five
+    keys and drops the measurements entirely.
+    """
+
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def artifact(tmp_path_factory):
+        import subprocess
+        import sys
+        root = pathlib.Path(__file__).resolve().parents[1]
+        out = tmp_path_factory.mktemp("attest") / "attestation.json"
+        result = subprocess.run(
+            [sys.executable, "-m", "bmc_sensor_audit.cli", "detect",
+             "--config", str(root / "tests/fixtures/upstream/meta/bletchley"),
+             "--walk", str(root / "tests/fixtures/walk_qemu_bletchley.json"),
+             "--attest-out", str(out)],
+            capture_output=True, text=True,
+            env={"PYTHONPATH": str(root / "src"), "PATH": "/usr/bin:/bin",
+                 "HOME": "/root"})
+        assert out.is_file(), result.stdout + result.stderr
+        return json.loads(out.read_text())
+
+    def test_it_records_what_was_checked(self, artifact):
+        assert artifact["checked"]["entities"] == 28
+        assert artifact["findings"]
+
+    def test_it_records_what_was_DECLINED(self, artifact):
+        """The half a compliance reader needs. An axiom that could not be evaluated
+        is not one that passed, and an artifact listing only findings reads as a
+        clean bill of health for every question nobody managed to ask."""
+        assert artifact["not_checked"], "the artifact records no declines at all"
+        assert all(d["reason"] for d in artifact["not_checked"])
+        assert any(d["axiom"] == "STABILITY" for d in artifact["not_checked"])
+
+    def test_every_finding_carries_the_numbers_behind_it(self, artifact):
+        """The reason `attest` is used at all. `check()` says *reading exceeds
+        critical threshold* and never says 14.8985 against 12.61."""
+        assert len(artifact["evidence"]) == len(artifact["findings"])
+        for entry in artifact["evidence"]:
+            measurement = entry["measurement"]
+            assert isinstance(measurement.get("value"), (int, float))
+            assert isinstance(measurement.get("threshold"), (int, float))
+            assert measurement.get("bound") in ("upper", "lower")
+
+    def test_it_carries_the_engines_own_boundary_verbatim(self, artifact):
+        """The engine declining to be called an attestation service. Quoted rather
+        than paraphrased: rewording it would make this repository the author of a
+        disclaimer the engine wrote."""
+        boundary = artifact["engine"]["boundary"]
+        assert boundary
+        assert "production attestation records are v0.2" in boundary
+
+    def test_it_names_sensors_as_the_board_names_them(self, artifact):
+        """An artifact naming a sanitised entity type is one nobody can act on six
+        months later."""
+        assert any(f["sensor"] == "P12V_AUX" for f in artifact["findings"])
+
+    def test_it_pins_the_envelope_schema_version(self, artifact):
+        assert artifact["engine"]["schema_version"] == 1
+
+    def test_a_problem_type_the_engine_will_not_attest_is_recorded(self, tmp_path):
+        """Not dropped. An artifact that silently omits what it could not attest
+        claims a completeness it does not have."""
+        from bmc_sensor_audit.detect.attestation import build_attestation
+
+        class _Refusing:
+            def to_dict(self):
+                return {"meta": {"source": "unavailable", "reason": "nope"}}
+
+        class _Manifest:
+            sensors = ()
+
+            def translate_finding(self, finding):
+                return "x"
+
+        envelope = {"findings": [{"entity_id": "e", "problem_type": "p:reading"}],
+                    "meta": {"schema_version": 1}}
+        built = build_attestation(None, envelope, {}, _Manifest(), target="t",
+                                 attest_fn=lambda *a, **k: _Refusing())
+        assert built["unattested"] == ["p:reading: nope"]
+        assert built["evidence"] == []

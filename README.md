@@ -34,12 +34,12 @@ installable from an index, and there is no tagged version.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 278 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 322 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
-reproducible by a reader** rather than only by us — twelve upstream configurations
+reproducible by a reader** rather than only by us — thirteen upstream configurations
 are vendored, and each documented finding has a test that runs against them.
 **Both tree shapes are now exercised against real firmware, at different ages.**
 The modern `Sensors` shape is proven against a capture from upstream `bmcweb`
@@ -168,10 +168,13 @@ silently corrupts a naive implementation:
   never sees at all.
 - **One `Exposes` entry can declare several sensors.** Hot-swap controllers carry
   a `Label` per rail; 1,132 entries use them and one declares 33. Counting
-  entries counts boards, not sensors. **The expansion comes from per-threshold
-  `Label` fields, not from an entry's `Labels` array** — which this parser reads
-  only to detect its overlap with channel names, never to expand on. Whether a
-  sensor declared through `Labels` alone is invisible here remains open.
+  entries counts boards, not sensors. **The rail set comes from the entry's
+  `Labels` array, which declares it** — not from its thresholds, which are only a
+  proxy for it. Across the vendored files `Labels` declares 149 rails and 34 carry
+  a threshold; reading the proxy left the other 115 unconstructed, so nothing
+  expected them and their absence could never be reported. A rail naming itself
+  through `<label>_Name` takes that name, because that is the name the machine
+  publishes.
 - **709 of 8,809 declared sensor names are runtime templates** — about one in
   twelve (`$bus`, `$address`, `$index`). Compared literally, every one of them
   reads as missing on a healthy board. `CONFIG_FORMAT.md` documents three such
@@ -197,15 +200,31 @@ pip install 'bmc-sensor-audit[detect]'
 ```
 
 **What it finds.** Readings past an upper bound; readings beneath a lower bound; a
-series that has stopped moving while the model says it should vary; and a sensor Stage 1
+series that has stopped moving while the model says it should vary; two readings an
+operator declared redundant that no longer agree; an input/output power imbalance
+past a declared loss margin; a counter that has gone backwards; and a sensor Stage 1
 said was reading whose value never reached the model, which means the name mapping is
 wrong.
 
-**Lower bounds go in negated.** The engine's bounds check is upper-only, so a stopped
-fan reading zero against a lower critical of 500 produces nothing at all. A lower bound
-becomes a second indicator carrying the negated reading against negated thresholds. The
-engine then reports `reading_low exceeds critical threshold`, which says a stopped fan
-is spinning too fast — so the report translates it back before you see it.
+**Lower bounds are declared, not negated.** They used to be: the engine's bounds check
+was upper-only, so a lower bound became a second indicator carrying the *negated*
+reading against negated thresholds, and the report un-inverted the wording on the way
+out. Engine 0.1.7 takes `lower_warning` and `lower_critical` directly, so that whole
+mechanism is deleted. A sensor declaring both pairs gets a band.
+
+**Three things the configuration cannot say.** Whether two sensors measure the same
+quantity, whether a reading is cumulative, and what conversion loss a power stage is
+allowed — none of these are in `entity-manager`, and none can be derived from what
+is. A TMP421's two channels are its own die and an external diode, which differ by
+tens of degrees on a working board; six SLED sensors on six different parts carry
+identical thresholds. So they come from an operator-declared file passed with
+`--supplemental`, each entry carrying a required `basis`. The generator lists
+multi-channel parts as *candidates* and asserts nothing about them.
+
+**A per-run record.** `--attest-out` writes what was checked, what was **declined**,
+and the measurement behind every finding — the reading, the threshold it crossed and
+which side of the band it was. It carries the engine's own boundary statement
+verbatim rather than paraphrased.
 
 **What it deliberately does not find.** Oscillation at periods other than two samples. A
 fan hunting on a four-sample cycle produces no finding and no decline. That is a gap in
@@ -344,7 +363,7 @@ a diff is safe to publish.
 ## Still open
 
 - **The corpus-wide totals are still not reproducible, though the findings now
-  are.** Twelve upstream configurations are vendored verbatim under
+  are.** Thirteen upstream configurations are vendored verbatim under
   `tests/fixtures/upstream/`, with Intel's copyright and the upstream licence
   carried alongside, and every documented parser finding is now runnable from a
   clone, **pinned to `0ada048303bb007c9d7ec3a6a90433169f05dd99`**. What they

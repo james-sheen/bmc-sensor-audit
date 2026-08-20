@@ -14,6 +14,8 @@ catches that, and it is the same discipline as the coverage report's own denomin
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 import sys
 from pathlib import Path
 
@@ -24,7 +26,7 @@ UPSTREAM = ROOT / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(ROOT / "src"))
 
 from bmc_sensor_audit.detect.generator import (  # noqa: E402
-    READING, READING_LOW, generate)
+    BOUND_OF_PROBLEM, READING, generate)
 from bmc_sensor_audit.inventory.entity_manager import (  # noqa: E402
     ANY_TEMPLATE, load_declaration)
 
@@ -70,14 +72,32 @@ class TestNothingVanishes:
         a real coverage diff reproducible from a clone. This move is the opposite
         shape -- every column grows, because a whole platform arrived rather than
         a handful of channels on files already here.
+
+        106 -> 180: two causes in one change, and they are worth separating.
+
+        The smaller one is another vendored file, `ampere/mtjade.json`, added for
+        the PSU input/output power pair a conservation check needs.
+
+        The larger one is a reader fix, and it has the same shape as the 65 -> 68
+        move: the rail set is now taken from the `Labels` array that DECLARES it
+        rather than from the thresholds, which are a proxy for it. Across this
+        corpus `Labels` declares 149 rails and 34 carry a threshold; the other 115
+        were never constructed, so nothing expected them and their absence could
+        never be reported.
+
+        **`excluded_no_thresholds` grows hardest -- 19 -> 137 -- and that is the
+        honest shape of the fix.** Most newly-visible rails carry no bounds, so
+        they are declared, counted, and then excluded from the MODEL with a stated
+        reason. Being excluded for a reason is the difference this whole ledger
+        exists to record: before, they were absent from it entirely.
         """
         _, _, manifest = built
         counts = manifest.counts()
-        assert counts["generated"] == 106
-        assert counts["excluded_templated_name"] == 11
-        assert counts["excluded_not_a_sensor"] == 24
-        assert counts["excluded_no_thresholds"] == 19
-        assert counts["with_lower_bound"] == 87
+        assert counts["generated"] == 180
+        assert counts["excluded_templated_name"] == 24
+        assert counts["excluded_not_a_sensor"] == 36
+        assert counts["excluded_no_thresholds"] == 137
+        assert counts["with_lower_bound"] == 137
 
 
 class TestTheModelIsWellFormed:
@@ -129,35 +149,60 @@ class TestTemplatedNamesNeverReachTheEngine:
 
 
 class TestFourBoundFidelity:
-    def test_lower_bounds_survive_as_a_negated_indicator(self, built):
-        """AC4. BOUNDEDNESS is upper-only, so a lower bound rides on the negated
-        reading. Without this a stopped fan reads clean."""
+    """AC4: a declared floor reaches the engine as a floor.
+
+    These used to assert the negation transform -- a mirrored `reading_low`
+    indicator carrying `-value` against `-threshold`, because BOUNDEDNESS was
+    upper-bound-only. Engine 0.1.7 takes floors natively, so the mechanism is gone
+    and these assert what it was FOR: the number the machine declared, on the
+    correct side, not lost and not sign-flipped. A test written as the old
+    limitation would now be a pin holding a falsehood.
+    """
+
+    def test_a_declared_floor_reaches_the_model_as_a_floor(self, built):
         _, model, manifest = built
         with_lower = [s for s in manifest.sensors if s.has_lower]
         assert with_lower
         for sensor in with_lower:
-            names = [i["name"] for i in model["domain"]["indicators"][sensor.entity_type]]
-            assert READING_LOW in names, f"{sensor.declared_name} lost its lower bound"
+            indicators = model["domain"]["indicators"][sensor.entity_type]
+            assert len(indicators) == 1, (
+                f"{sensor.declared_name} has {len(indicators)} indicators; the "
+                f"mirrored one should have been retired")
+            keys = indicators[0]
+            assert "lower_critical" in keys or "lower_warning" in keys, (
+                f"{sensor.declared_name} lost its lower bound")
 
-    def test_the_negation_preserves_threshold_ordering(self, built):
-        """Critical must be the more extreme number after negation, or the engine
-        reads the pair backwards and warns where it should alarm."""
-        _, model, manifest = built
-        for sensor in (s for s in manifest.sensors if s.has_lower):
-            low = next(i for i in model["domain"]["indicators"][sensor.entity_type]
-                       if i["name"] == READING_LOW)
-            assert low["critical"] >= low["warning"], (
-                f"{sensor.declared_name}: negated critical {low['critical']} is not "
-                f"beyond warning {low['warning']}")
-
-    def test_a_negated_bound_is_the_arithmetic_negation(self, built):
+    def test_a_floor_is_the_declared_number_not_its_negation(self, built):
+        """The sign is the whole regression risk in retiring the transform: a
+        leftover negation would read as a floor of -500 for a fan declared at 500,
+        which no reading can ever fall below."""
         _, model, manifest = built
         sensor = next(s for s in manifest.sensors
                       if s.lower[1] is not None and s.lower[0] is not None)
-        low = next(i for i in model["domain"]["indicators"][sensor.entity_type]
-                   if i["name"] == READING_LOW)
-        assert low["warning"] == -sensor.lower[0]
-        assert low["critical"] == -sensor.lower[1]
+        indicator = model["domain"]["indicators"][sensor.entity_type][0]
+        assert indicator["lower_warning"] == sensor.lower[0]
+        assert indicator["lower_critical"] == sensor.lower[1]
+
+    def test_a_floor_is_never_above_its_own_ceiling(self, built):
+        """A band whose floor sits at or above its ceiling is declined by the engine
+        once as `missing_config` rather than firing forever, so a generator that
+        emitted one would silently stop checking that sensor."""
+        _, model, manifest = built
+        for sensor in manifest.sensors:
+            i = model["domain"]["indicators"][sensor.entity_type][0]
+            if "lower_critical" in i and "critical" in i:
+                assert i["lower_critical"] < i["critical"], (
+                    f"{sensor.declared_name}: floor {i['lower_critical']} is not "
+                    f"below ceiling {i['critical']}")
+
+    def test_no_mirrored_indicator_survives_anywhere(self, built):
+        """Set equality against the whole model, not a spot check. A leftover
+        mirror would feed negated values nothing reads and inflate the denominator
+        with invariants that can only decline."""
+        _, model, _ = built
+        names = {i["name"] for inds in model["domain"]["indicators"].values()
+                 for i in inds}
+        assert names == {READING}, f"unexpected indicator names: {sorted(names)}"
 
     def test_levels_beyond_warning_and_critical_are_recorded_not_folded(self, built):
         """entity-manager also declares `hard_shutdown` and `non_recoverable`; the
@@ -172,27 +217,62 @@ class TestFourBoundFidelity:
 
 
 class TestTranslationBackToTheSensor:
-    def test_a_lower_bound_finding_is_not_reported_as_exceeding(self, built):
-        """The engine's text is right about the model and wrong about the world: a
-        stopped fan produces `reading_low exceeds critical threshold`. Reported raw,
-        that says a stopped fan is spinning too fast."""
+    """The engine names the sanitised entity type; an operator knows the name on the
+    board. Translation is now only that -- it stopped being un-negation when the
+    engine started saying *below* itself."""
+
+    @pytest.mark.parametrize("problem_type", [
+        "below_critical_threshold", "below_warning_threshold", "approaching_floor"])
+    def test_every_floor_side_finding_reads_as_below(self, built, problem_type):
         _, _, manifest = built
         sensor = next(s for s in manifest.sensors if s.lower[1] is not None)
         finding = {"entity_id": sensor.entity_type, "severity": "critical",
-                   "problem_type": f"threshold_exceeded:{READING_LOW}",
-                   "reason": f"{READING_LOW} exceeds critical threshold"}
+                   "problem_type": f"{problem_type}:{READING}",
+                   "reason": f"{READING} is below critical threshold"}
         translated = manifest.translate_finding(finding)
         assert "BELOW" in translated
         assert sensor.declared_name in translated
-        assert READING_LOW not in translated
 
-    def test_an_upper_bound_finding_still_reads_as_above(self, built):
+    @pytest.mark.parametrize("problem_type", [
+        "threshold_exceeded", "threshold_warning", "approaching_limit"])
+    def test_every_ceiling_side_finding_reads_as_above(self, built, problem_type):
         _, _, manifest = built
         sensor = next(s for s in manifest.sensors if s.upper[1] is not None)
         finding = {"entity_id": sensor.entity_type, "severity": "critical",
-                   "problem_type": f"threshold_exceeded:{READING}",
+                   "problem_type": f"{problem_type}:{READING}",
                    "reason": f"{READING} exceeds critical threshold"}
         assert "above" in manifest.translate_finding(finding)
+
+    def test_the_bound_table_is_the_engines_vocabulary_not_ours(self):
+        """Derived, not transcribed. Every BOUNDEDNESS problem_type the installed
+        engine can emit must be classified, or a finding lands on the wrong side of
+        the band with full confidence.
+
+        Read off the checker's source rather than off a probe, because a probe only
+        shows the arms it managed to trigger -- which is how an arm gets missed.
+        """
+        boundedness = pytest.importorskip(
+            "arbiter_engine.ontology.axioms.boundedness",
+            reason="engine is the optional [detect] extra")
+        source = pathlib.Path(boundedness.__file__).read_text()
+        emitted = set(re.findall(r"problem_type=f?['\"]([a-z_]+):", source))
+        unclassified = emitted - set(BOUND_OF_PROBLEM)
+        assert not unclassified, (
+            f"BOUNDEDNESS can emit {sorted(unclassified)}, which this build does not "
+            f"map to a side of the band; a finding of that shape would be reported "
+            f"with the engine's own words and no direction")
+
+    def test_an_unknown_problem_type_is_not_filed_under_either_side(self, built):
+        """The other half. Guessing between `above` and `BELOW` on an unrecognised
+        shape is the confident misclassification this project keeps finding."""
+        _, _, manifest = built
+        sensor = manifest.sensors[0]
+        finding = {"entity_id": sensor.entity_type, "severity": "warning",
+                   "problem_type": f"some_future_arm:{READING}",
+                   "reason": f"{READING} did something new"}
+        translated = manifest.translate_finding(finding)
+        assert "BELOW" not in translated and "above its upper" not in translated
+        assert sensor.declared_name in translated
 
     def test_a_liveness_finding_is_not_rendered_as_a_threshold_breach(self, built):
         """The engine has more than one finding shape. Treating every one as a bound
