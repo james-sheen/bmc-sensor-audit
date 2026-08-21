@@ -1,0 +1,100 @@
+# Does the PUBLISHED action still work?
+#
+# `dogfood.yml` runs `uses: ./`, which is the tree under review. This runs
+# `@v1`, which is what consumers actually get, and the two can differ in ways
+# nothing else here would notice.
+#
+# The seam it watches is a RANGE. `action.yml` pins the tool as
+# `bmc-sensor-audit>=0.1,<0.2`, so any 0.1.x release lands in every consumer's
+# pipeline without this repository changing at all and without anybody choosing
+# it. That is the same argument as the engine canary one level up: the engine
+# canary asks whether a permitted `arbiter-engine` release moved something, and
+# this asks whether a permitted `bmc-sensor-audit` release moved something for
+# the people who adopted us through five lines of YAML.
+#
+# **Two invocations, expecting different codes.** One assertion of `1` would pass
+# just as well if the action had broken into always failing; one assertion of `0`
+# would pass if it had broken into always passing. Neither survives both.
+#
+# Scheduled, because a published tag decays without any push of ours. It also
+# fires when `action.yml` changes, because a schedule-only workflow in a sibling
+# project accumulated zero runs across fifteen pushes -- a canary nobody has ever
+# seen sing is not a canary.
+
+name: action canary
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - "action.yml"
+      - ".github/workflows/action-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  published:
+    name: "@v1, as a consumer gets it"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Serve a BMC that matches its declaration
+        id: mock
+        run: |
+          set -euo pipefail
+          mkdir -p canary
+          cat > canary/board.json <<'JSON'
+          {"Name": "Board",
+           "Exposes": [{"Name": "Inlet", "Type": "TMP75"},
+                       {"Name": "Outlet", "Type": "TMP75"}]}
+          JSON
+          cat > canary/mock.py <<'PY'
+          import pathlib, sys, time
+          sys.path.insert(0, "src")
+          from bmc_sensor_audit.testing.mock_redfish import MockBMC, MockSensor, serve
+          bmc = MockBMC(sensors=[MockSensor(name="Inlet", reading=21.0),
+                                 MockSensor(name="Outlet", reading=27.5)])
+          with serve(bmc) as url:
+              pathlib.Path("canary/url.txt").write_text(url)
+              time.sleep(900)
+          PY
+          nohup python3 canary/mock.py > canary/mock.log 2>&1 &
+          for _ in $(seq 1 60); do
+              [ -s canary/url.txt ] && break
+              sleep 0.25
+          done
+          test -s canary/url.txt || { echo "the mock never published a URL"; cat canary/mock.log; exit 1; }
+          echo "url=$(cat canary/url.txt)" >> "$GITHUB_OUTPUT"
+
+      # The action's own install step prints the version the range resolved to, so
+      # a red run names the release that caused it rather than leaving that to be
+      # guessed from a diff nobody made.
+      - id: findings
+        continue-on-error: true
+        uses: james-sheen/bmc-sensor-audit@v1
+        with:
+          config: tests/fixtures/upstream/meta/bletchley
+          walk: tests/fixtures/walk_qemu_bletchley.json
+
+      - id: matched
+        continue-on-error: true
+        uses: james-sheen/bmc-sensor-audit@v1
+        with:
+          config: canary/board.json
+          target: ${{ steps.mock.outputs.url }}
+
+      - name: The published action still tells the two apart
+        run: |
+          set -euo pipefail
+          echo "vendored capture : ${{ steps.findings.outputs.exit-code }} (${{ steps.findings.outputs.verdict }})"
+          echo "matched machine  : ${{ steps.matched.outputs.exit-code }} (${{ steps.matched.outputs.verdict }})"
+          test "${{ steps.findings.outputs.verdict }}" = "regressions"
+          test "${{ steps.matched.outputs.verdict }}" = "clean"
