@@ -4,7 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bmc-sensor-audit"
-version = "0.0.0"
+# Read from `src/bmc_sensor_audit/__init__.py` rather than written here. The two
+# were separate literals that happened to agree, which is the arrangement that
+# drifts: nothing read the package one, so a bump here would have shipped a
+# wheel whose `__version__` disagreed with its own metadata and no check would
+# have noticed. One home, and the build backend reads it.
+dynamic = ["version"]
 description = "Find the sensors that should be reporting and are not."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +35,17 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 bmc-sensor-audit = "bmc_sensor_audit.cli:main"
+
+# An index page with no way back to the source is a dead end for the one reader
+# who wants to check a claim. CITATION.cff has carried the repository URL since
+# it was written; this is the same fact, in the place a package manager reads.
+[project.urls]
+Homepage = "https://github.com/james-sheen/bmc-sensor-audit"
+Source = "https://github.com/james-sheen/bmc-sensor-audit"
+Issues = "https://github.com/james-sheen/bmc-sensor-audit/issues"
+
+[tool.hatch.version]
+path = "src/bmc_sensor_audit/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bmc_sensor_audit"]

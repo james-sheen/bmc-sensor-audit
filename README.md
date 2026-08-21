@@ -21,21 +21,22 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Stage 1, in progress.** The coverage diff works end to end and is exercised
-against the full upstream configuration corpus. Not yet released, not yet
-installable from an index, and there is no tagged version.
+**Released — 0.1.0**, tagged `v0.1.0`, Apache-2.0, on PyPI as
+[`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
+diff works end to end and is exercised against the full upstream configuration
+corpus; the firmware regression gate and the liveness pass ship alongside it.
 
-**On the missing tag, since silence about it would be the wrong lesson.** The
-work a release needs is done and under test: the community and citation files,
-the attestation format with a shipped validator, and the walk-ordering fix that
-made a run's idea of *now* verifiable. The one acceptance criterion still
-honestly open is a capture from **physical** hardware — described further down,
-and not the same thing as a release blocker. No other condition is recorded here.
+**What 0.1.0 does not have, since silence about it would be the wrong lesson.**
+No capture from **physical** hardware. Every fixture here came from an emulator
+or from upstream, which is described further down rather than implied away. The
+previous version of this paragraph recorded that criterion as honestly open and
+*not the same thing as a release blocker* — releasing without it is that sentence
+being kept, not quietly dropped. Stage 3, fleet comparison, is not started.
 
-That last sentence is the point. *Not done yet* and *waiting for X* are different
-claims, and only the written one can be checked by a reader — which is the whole
-argument this tool makes about sensors, applied to its own status. If a condition
-does gate the tag, it belongs in this paragraph.
+*Not done yet* and *waiting for X* are different claims, and only the written one
+can be checked by a reader — which is the whole argument this tool makes about
+sensors, applied to its own status. If a condition gates the next version, it
+belongs in this paragraph.
 
 | | |
 |---|---|
@@ -48,7 +49,7 @@ does gate the tag, it belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 441 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 443 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | Fleet comparison (Stage 3) | not started |
 
@@ -121,12 +122,14 @@ PYTHONPATH=src python3 -m bmc_sensor_audit.cli validate-attestation attestation.
 The format is documented in
 [`docs/attestation-format.md`](docs/attestation-format.md).
 
-Or install it and use the console script, which needs no `PYTHONPATH`:
+Or install it from PyPI and use the console script, which needs no `PYTHONPATH`:
 
 ```
-pip install -e .
+pip install bmc-sensor-audit
 bmc-sensor-audit declare --config <entity-manager-configs>
 ```
+
+Working from a clone instead, `pip install -e .` puts the same script on the path.
 
 **Going to run the test suite? Enable the hook first.**
 
