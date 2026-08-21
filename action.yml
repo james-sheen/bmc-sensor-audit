@@ -91,9 +91,15 @@ runs:
         BSA_MODE: ${{ inputs.mode }}
       run: |
         set -euo pipefail
-        # The pin lives here and moves only in a release change. An action major
-        # tracks a tool minor range, so a consumer who wrote @v1 keeps getting the
-        # behaviour they tested against.
+        # The pin lives here and moves only in a release change, so the tag a
+        # consumer wrote keeps giving them the behaviour they tested against.
+        #
+        # It is a RANGE, and it widens when a new tool release proves compatible.
+        # Widening is not a breaking change and does not move this action's major:
+        # tying the major to the tool's minor would burn a major every time the
+        # tool shipped one, whether or not anything a consumer wrote had to
+        # change, and a number that increments for invisible reasons stops
+        # carrying information.
         case "$BSA_MODE" in
           detect)   spec='bmc-sensor-audit[detect]>=0.1,<0.2' ;;
           coverage) spec='bmc-sensor-audit>=0.1,<0.2' ;;

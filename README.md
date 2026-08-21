@@ -51,7 +51,7 @@ belongs in this paragraph.
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
 | Tests | 463 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
-| GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@v1`; the repository's own CI runs it as a consumer would and pins all three exit codes |
+| GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
@@ -306,7 +306,7 @@ the firmware carries **now**.
 The gate costs five lines in someone else's firmware pipeline:
 
 ```yaml
-- uses: james-sheen/bmc-sensor-audit@v1
+- uses: james-sheen/bmc-sensor-audit@action-v0
   with:
     config: configs/
     walk: captures/after-flash.json
@@ -349,19 +349,32 @@ A misconfigured run — `walk` and `target` together, neither of them, or `attes
 without `detect` — reports `2` as well. It has not judged the machine it was
 pointed at, and that is the same fact.
 
-**Which tool version you get.** The pin lives in `action.yml` and moves only in a
-release change, so an action major keeps giving you the behaviour you tested
-against:
+**Two things are versioned here, so the tags say which.** Bare `vX.Y.Z` is the
+tool on PyPI; `action-vX.Y.Z` is this action. They are separate artifacts with
+separate interfaces, and one tag namespace would otherwise have to serve both —
+which is how a repository ends up unable to release its own 1.0.
 
-| Action | Installs |
-|---|---|
-| `@v1` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
+| Tag | Versions | Installs |
+|---|---|---|
+| `v0.1.0` | the tool, on PyPI | — |
+| `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
 
-`@v1` tracks the latest `v1.x.y`, which is the Marketplace convention and means
-you get fixes without editing anything. If you would rather nothing move under
-you, pin the full commit SHA instead — `uses: james-sheen/bmc-sensor-audit@<sha>`.
-Both are real positions and the tension between them is not worth pretending away:
-the moving tag trusts this repository, the SHA trusts nothing and updates nothing.
+**`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the
+input surface is stable and that breaking it costs a major bump. Nobody outside
+this repository has invoked this action yet, so that promise would be the one
+claim here not backed by a measurement — which is not a thing this project gets
+to do, given what the rest of it argues. It moves to `action-v1` when there is
+someone to make the promise to.
+
+The pin lives in `action.yml` and moves only in a release change, so the tag you
+wrote keeps giving you the behaviour you tested against. Note that the pin widens
+when a new tool release proves compatible; that is not a breaking change and does
+not move the action's major, because nothing you wrote has to change.
+
+If you would rather nothing move under you at all, pin the full commit SHA —
+`uses: james-sheen/bmc-sensor-audit@<sha>`. Both are real positions and the
+tension is not worth pretending away: the moving tag trusts this repository, the
+SHA trusts nothing and updates nothing.
 
 **On `attest` and live targets.** An attestation records what was checked and what
 was declined, and uploading it publishes whatever `--target` was to anyone who can

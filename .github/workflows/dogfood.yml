@@ -8,9 +8,10 @@
 # which needs no runner. This is the other half: the action actually running on a
 # clean machine, installing from the index, against fixtures anyone can reproduce.
 #
-# `uses: ./` on purpose. A consumer writes `@v1`, but a workflow that tested `@v1`
-# would test the last release rather than the change under review, and would go
-# green on a broken tree. The published tag is watched separately by the canary.
+# `uses: ./` on purpose. A consumer writes `@action-v0`, but a workflow that
+# tested that tag would test the last release rather than the change under
+# review, and would go green on a broken tree. The published tag is watched
+# separately by the canary.
 #
 # Each job asserts an EXPECTED exit code rather than success. A gate that expects
 # regressions is the only honest test of one, and `2` -- could not complete -- is

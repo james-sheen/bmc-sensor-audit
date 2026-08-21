@@ -1,7 +1,7 @@
 # Does the PUBLISHED action still work?
 #
 # `dogfood.yml` runs `uses: ./`, which is the tree under review. This runs
-# `@v1`, which is what consumers actually get, and the two can differ in ways
+# `@action-v0`, which is what consumers actually get, and the two can differ in ways
 # nothing else here would notice.
 #
 # The seam it watches is a RANGE. `action.yml` pins the tool as
@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   published:
-    name: "@v1, as a consumer gets it"
+    name: "@action-v0, as a consumer gets it"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,14 +79,14 @@ jobs:
       # guessed from a diff nobody made.
       - id: findings
         continue-on-error: true
-        uses: james-sheen/bmc-sensor-audit@v1
+        uses: james-sheen/bmc-sensor-audit@action-v0
         with:
           config: tests/fixtures/upstream/meta/bletchley
           walk: tests/fixtures/walk_qemu_bletchley.json
 
       - id: matched
         continue-on-error: true
-        uses: james-sheen/bmc-sensor-audit@v1
+        uses: james-sheen/bmc-sensor-audit@action-v0
         with:
           config: canary/board.json
           target: ${{ steps.mock.outputs.url }}
