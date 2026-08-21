@@ -49,8 +49,9 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 443 collected with no dependencies installed; two of them scan the serialised model and skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 463 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
+| GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@v1`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison (Stage 3) | not started |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
@@ -299,6 +300,75 @@ nobody asked. The flag asks it. With it, an uncomparable run exits `2` and names
 which capture is the stale one, and the after-walk's own strictness is printed
 alongside the delta: `field_drift` names what **arrived**, the section names what
 the firmware carries **now**.
+
+## The GitHub Action
+
+The gate costs five lines in someone else's firmware pipeline:
+
+```yaml
+- uses: james-sheen/bmc-sensor-audit@v1
+  with:
+    config: configs/
+    walk: captures/after-flash.json
+```
+
+It is a composite action — `actions/setup-python` plus a pinned `pip install` is
+the whole machine. No Docker image, no JavaScript runtime, nothing to audit that
+the people auditing the tool are not already auditing.
+
+**Inputs**
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `config` | yes | — | file or directory, walked recursively; newline-separated for several |
+| `walk` | one of `walk`/`target` | — | newline-separated for several, **oldest first** — liveness reads them as a series |
+| `target` | one of `walk`/`target` | — | live Redfish base URL; mutually exclusive with `walk` |
+| `username` / `password` | with `target` | — | pass from `secrets`; never written into the generated script |
+| `insecure` | no | `false` | lab TLS; BMCs ship self-signed certificates |
+| `mode` | no | `detect` | `coverage` for Stage-1-only pipelines, which installs no engine |
+| `attest` | no | `false` | writes `attestation.json` and uploads it; requires `mode: detect` |
+| `attest-target-label` | no | — | site-neutral name to record instead of the URL — see the warning below |
+| `python-version` | no | `3.12` | the tool requires 3.10 or newer |
+
+**Outputs**
+
+| Output | Meaning |
+|---|---|
+| `exit-code` | the tool's own `0` / `1` / `2`, verbatim |
+| `verdict` | `clean` / `regressions` / `incomplete` — the same fact as a word |
+
+**The step fails on any nonzero exit. That is the gate.** A workflow that needs to
+tell the three apart sets `continue-on-error: true` and reads the outputs, and the
+contract it reads is the tool's own: `2` is *could not complete*, and
+**could-not-complete never reads as clean**. The outputs are written before the
+step exits, so a failing run is still readable — a step that dies without writing
+them leaves a consumer branching on an empty string, and the runs worth branching
+on are the ones that failed.
+
+A misconfigured run — `walk` and `target` together, neither of them, or `attest`
+without `detect` — reports `2` as well. It has not judged the machine it was
+pointed at, and that is the same fact.
+
+**Which tool version you get.** The pin lives in `action.yml` and moves only in a
+release change, so an action major keeps giving you the behaviour you tested
+against:
+
+| Action | Installs |
+|---|---|
+| `@v1` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
+
+`@v1` tracks the latest `v1.x.y`, which is the Marketplace convention and means
+you get fixes without editing anything. If you would rather nothing move under
+you, pin the full commit SHA instead — `uses: james-sheen/bmc-sensor-audit@<sha>`.
+Both are real positions and the tension between them is not worth pretending away:
+the moving tag trusts this repository, the SHA trusts nothing and updates nothing.
+
+**On `attest` and live targets.** An attestation records what was checked and what
+was declined, and uploading it publishes whatever `--target` was to anyone who can
+read the artifact. That is a different door out of your pipeline than the log is,
+and no secret scanner reads it. When `attest` is on against a `target` with no
+`attest-target-label`, the action emits a warning rather than refusing — you may
+have meant it, and a refusal there would be the wrong size of response.
 
 ## Liveness (Stage 2)
 

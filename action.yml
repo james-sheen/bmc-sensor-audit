@@ -1,0 +1,205 @@
+# Run the sensor-coverage gate in someone else's firmware pipeline, in five lines.
+#
+# Composite on purpose: `actions/setup-python` plus a pinned `pip install` is the
+# whole machine. No Docker image to rebuild, no JavaScript runtime, nothing that
+# needs auditing by anyone other than the people who already audit the tool.
+#
+# EVERY input reaches bash through `env:`, never through `${{ }}` inside `run:`.
+# A workflow expression is substituted into the script before bash sees it, so an
+# input carrying a shell metacharacter would execute -- and the inputs here name
+# paths and URLs supplied by whoever calls the action. The values are read as
+# ordinary variables instead, which is also how the credentials stay out of the
+# generated script.
+name: bmc-sensor-audit
+description: Find the sensors that should be reporting and are not.
+author: James Sheen
+
+branding:
+  icon: search
+  color: gray-dark
+
+inputs:
+  config:
+    description: >-
+      entity-manager JSON file or directory, walked recursively. Newline-separated
+      for more than one, because a platform's declaration is normally several files.
+    required: true
+  walk:
+    description: >-
+      A recorded walk to judge instead of live hardware. Newline-separated for
+      several, OLDEST FIRST -- liveness reads them as a series. Mutually exclusive
+      with `target`.
+    required: false
+    default: ''
+  target:
+    description: Redfish base URL of a live BMC. Mutually exclusive with `walk`.
+    required: false
+    default: ''
+  username:
+    description: BMC username. Pass from `secrets`, never as a literal.
+    required: false
+    default: ''
+  password:
+    description: BMC password. Pass from `secrets`, never as a literal.
+    required: false
+    default: ''
+  insecure:
+    description: Do not verify TLS. BMCs ship self-signed certificates.
+    required: false
+    default: 'false'
+  mode:
+    description: >-
+      `detect` runs coverage and liveness in one pass; `coverage` is Stage 1 only
+      and installs no engine.
+    required: false
+    default: 'detect'
+  attest:
+    description: >-
+      Write a per-run attestation and upload it as an artifact. Requires
+      `mode: detect` -- the tool only writes one from that subcommand.
+    required: false
+    default: 'false'
+  attest-target-label:
+    description: >-
+      Site-neutral name to record instead of the target URL. Read the warning this
+      action emits when it is absent.
+    required: false
+    default: ''
+  python-version:
+    description: Interpreter for the tool. The package requires 3.10 or newer.
+    required: false
+    default: '3.12'
+
+outputs:
+  exit-code:
+    description: The tool's own exit code, verbatim -- 0 clean, 1 regressions, 2 could not complete.
+    value: ${{ steps.audit.outputs.exit-code }}
+  verdict:
+    description: The same fact as a word -- clean, regressions, or incomplete.
+    value: ${{ steps.audit.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install the pinned tool
+      shell: bash
+      env:
+        BSA_MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        # The pin lives here and moves only in a release change. An action major
+        # tracks a tool minor range, so a consumer who wrote @v1 keeps getting the
+        # behaviour they tested against.
+        case "$BSA_MODE" in
+          detect)   spec='bmc-sensor-audit[detect]>=0.1,<0.2' ;;
+          coverage) spec='bmc-sensor-audit>=0.1,<0.2' ;;
+          *) echo "::error::mode must be detect or coverage, not '$BSA_MODE'"; exit 2 ;;
+        esac
+        python3 -m pip install --quiet --upgrade pip
+        python3 -m pip install --quiet "$spec"
+        python3 -m pip show bmc-sensor-audit | sed -n 's/^Version: /resolved bmc-sensor-audit /p'
+
+    - name: Audit
+      id: audit
+      shell: bash
+      env:
+        BSA_MODE: ${{ inputs.mode }}
+        BSA_CONFIG: ${{ inputs.config }}
+        BSA_WALK: ${{ inputs.walk }}
+        BSA_TARGET: ${{ inputs.target }}
+        BSA_USERNAME: ${{ inputs.username }}
+        BSA_PASSWORD: ${{ inputs.password }}
+        BSA_INSECURE: ${{ inputs.insecure }}
+        BSA_ATTEST: ${{ inputs.attest }}
+        BSA_ATTEST_LABEL: ${{ inputs.attest-target-label }}
+      run: |
+        set -uo pipefail
+
+        # A misconfigured run has NOT judged the machine it was pointed at, so it
+        # reports as could-not-complete rather than as a clean gate. The whole
+        # argument for a distinct 2 is that nothing else may read as 0.
+        fail_setup () {
+          echo "::error::$1"
+          echo "exit-code=2" >> "$GITHUB_OUTPUT"
+          echo "verdict=incomplete" >> "$GITHUB_OUTPUT"
+          exit 2
+        }
+
+        if [ -n "$BSA_WALK" ] && [ -n "$BSA_TARGET" ]; then
+          fail_setup "give walk or target, not both: walk judges a recording, target reads a live BMC"
+        fi
+        if [ -z "$BSA_WALK" ] && [ -z "$BSA_TARGET" ]; then
+          fail_setup "one of walk or target is required"
+        fi
+        if [ "$BSA_ATTEST" = 'true' ] && [ "$BSA_MODE" != 'detect' ]; then
+          fail_setup "attest requires mode: detect -- coverage does not write an attestation"
+        fi
+
+        args=( "$BSA_MODE" )
+        # Newline-separated, so a platform's several declaration files do not have
+        # to be enumerated on one line by a caller who might miss one.
+        while IFS= read -r item; do
+          [ -n "$item" ] && args+=( --config "$item" )
+        done <<< "$BSA_CONFIG"
+        while IFS= read -r item; do
+          [ -n "$item" ] && args+=( --walk "$item" )
+        done <<< "$BSA_WALK"
+
+        [ -n "$BSA_TARGET" ] && args+=( --target "$BSA_TARGET" )
+        # Quoted expansions of variables, not of workflow expressions. The secret
+        # is never written into the script GitHub generates for this step.
+        [ -n "$BSA_USERNAME" ] && args+=( --username "$BSA_USERNAME" )
+        [ -n "$BSA_PASSWORD" ] && args+=( --password "$BSA_PASSWORD" )
+        [ "$BSA_INSECURE" = 'true' ] && args+=( --insecure )
+
+        if [ "$BSA_ATTEST" = 'true' ]; then
+          args+=( --attest-out attestation.json )
+          if [ -n "$BSA_ATTEST_LABEL" ]; then
+            args+=( --attest-target-label "$BSA_ATTEST_LABEL" )
+          elif [ -n "$BSA_TARGET" ]; then
+            # An uploaded artifact is a different door out of this pipeline than
+            # the log is, and nothing scans it. Whatever --target was becomes
+            # readable by anyone who can reach the artifact.
+            echo "::warning::attest is on and no attest-target-label was given, so the artifact will record the target URL. An artifact is a published channel that no secret scanner reads."
+          fi
+        fi
+
+        set +e
+        bmc-sensor-audit "${args[@]}"
+        code=$?
+        set -e
+
+        # Written BEFORE the exit, so a failing gate is still readable. A step that
+        # dies without writing its outputs is a silent instrument, and a consumer
+        # branching on `verdict` would see an empty string rather than a verdict.
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        case "$code" in
+          0) verdict=clean ;;
+          1) verdict=regressions ;;
+          2) verdict=incomplete ;;
+          *) verdict=unknown ;;
+        esac
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "bmc-sensor-audit exited $code ($verdict)"
+
+        # The gate. Nonzero fails the step; a workflow that needs to tell 1 from 2
+        # sets continue-on-error and reads the outputs above.
+        exit "$code"
+
+    - name: Keep the attestation
+      # `always()` is load-bearing. The audit step exits nonzero whenever it finds
+      # anything, and a composite action skips the rest of its steps when one
+      # fails -- so without this the artifact would exist for exactly the runs
+      # nobody needs it for, and be missing from every run that found something.
+      # The hashFiles guard keeps a setup failure, which writes no artifact, from
+      # tripping if-no-files-found.
+      if: ${{ always() && inputs.attest == 'true' && hashFiles('attestation.json') != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: bmc-sensor-audit-attestation
+        path: attestation.json
+        if-no-files-found: error

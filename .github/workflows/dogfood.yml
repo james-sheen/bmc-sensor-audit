@@ -1,0 +1,140 @@
+# Use this repository's own action the way a consumer would, and pin all three
+# exit semantics while doing it.
+#
+# The action is the distribution strategy -- a firmware pipeline adopts this tool
+# by pasting five lines of YAML -- so the thing that has to keep working is not the
+# CLI, which the suite covers, but the translation from those five lines to the
+# flags underneath. That translation has unit coverage in tests/test_action.py,
+# which needs no runner. This is the other half: the action actually running on a
+# clean machine, installing from the index, against fixtures anyone can reproduce.
+#
+# `uses: ./` on purpose. A consumer writes `@v1`, but a workflow that tested `@v1`
+# would test the last release rather than the change under review, and would go
+# green on a broken tree. The published tag is watched separately by the canary.
+#
+# Each job asserts an EXPECTED exit code rather than success. A gate that expects
+# regressions is the only honest test of one, and `2` -- could not complete -- is
+# the code that must never read as clean, so it is pinned here at the layer where
+# a consumer would meet it.
+
+name: dogfood the action
+
+on:
+  push:
+    paths:
+      - "action.yml"
+      - ".github/workflows/dogfood.yml"
+      - "tests/test_action.py"
+      - "src/bmc_sensor_audit/cli.py"
+  pull_request:
+    paths:
+      - "action.yml"
+      - ".github/workflows/dogfood.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regressions:
+    name: "exit 1 -- the capture has real findings"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: audit
+        continue-on-error: true
+        uses: ./
+        with:
+          config: tests/fixtures/upstream/meta/bletchley
+          walk: tests/fixtures/walk_qemu_bletchley.json
+
+      - name: The gate reported regressions, and said so in both channels
+        run: |
+          set -euo pipefail
+          echo "exit-code=${{ steps.audit.outputs.exit-code }} verdict=${{ steps.audit.outputs.verdict }}"
+          test "${{ steps.audit.outputs.exit-code }}" = "1"
+          test "${{ steps.audit.outputs.verdict }}" = "regressions"
+          # The step itself must have failed. If it passed, the gate is not a gate,
+          # and every assertion above would still hold.
+          test "${{ steps.audit.outcome }}" = "failure"
+
+  incomplete:
+    name: "exit 2 -- could not complete, and that is not clean"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: audit
+        continue-on-error: true
+        uses: ./
+        with:
+          config: configs/that/do/not/exist
+          walk: tests/fixtures/walk_qemu_bletchley.json
+
+      - name: A run that could not read its expectation is not a passing run
+        run: |
+          set -euo pipefail
+          echo "exit-code=${{ steps.audit.outputs.exit-code }} verdict=${{ steps.audit.outputs.verdict }}"
+          test "${{ steps.audit.outputs.exit-code }}" = "2"
+          test "${{ steps.audit.outputs.verdict }}" = "incomplete"
+          test "${{ steps.audit.outcome }}" = "failure"
+
+  clean:
+    name: "exit 0 -- a matched machine, over real HTTP"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Serve a BMC that reports exactly what the declaration expects
+        id: mock
+        # Started from the checkout rather than the installed package, so the
+        # server under test is the tree under review. It answers real HTTP on a
+        # loopback port, which is the one path the unit tests cannot cover: they
+        # check the argv the action builds, not that a live target is reachable.
+        run: |
+          set -euo pipefail
+          mkdir -p dogfood
+          cat > dogfood/board.json <<'JSON'
+          {"Name": "Board",
+           "Exposes": [{"Name": "Inlet", "Type": "TMP75"},
+                       {"Name": "Outlet", "Type": "TMP75"}]}
+          JSON
+          cat > dogfood/mock.py <<'PY'
+          import pathlib, sys, time
+          sys.path.insert(0, "src")
+          from bmc_sensor_audit.testing.mock_redfish import MockBMC, MockSensor, serve
+          bmc = MockBMC(sensors=[MockSensor(name="Inlet", reading=21.0),
+                                 MockSensor(name="Outlet", reading=27.5)])
+          with serve(bmc) as url:
+              pathlib.Path("dogfood/url.txt").write_text(url)
+              time.sleep(900)
+          PY
+          nohup python3 dogfood/mock.py > dogfood/mock.log 2>&1 &
+          for _ in $(seq 1 60); do
+              [ -s dogfood/url.txt ] && break
+              sleep 0.25
+          done
+          # A missing URL is a failed fixture, not a clean run. Without this the
+          # next step would audit an empty target and the job would report on
+          # something that never started.
+          test -s dogfood/url.txt || { echo "the mock never published a URL"; cat dogfood/mock.log; exit 1; }
+          echo "url=$(cat dogfood/url.txt)" >> "$GITHUB_OUTPUT"
+          echo "mock serving at $(cat dogfood/url.txt)"
+
+      - id: audit
+        uses: ./
+        with:
+          config: dogfood/board.json
+          target: ${{ steps.mock.outputs.url }}
+
+      - name: A matched machine reports clean
+        run: |
+          set -euo pipefail
+          echo "exit-code=${{ steps.audit.outputs.exit-code }} verdict=${{ steps.audit.outputs.verdict }}"
+          test "${{ steps.audit.outputs.exit-code }}" = "0"
+          test "${{ steps.audit.outputs.verdict }}" = "clean"
