@@ -160,10 +160,83 @@ class TestTheReleaseRecordsAgree:
                 f"the README does not announce {version}; Status should lead with "
                 f"`**Released — {version}**` so this has one place to look")
 
+    #: The TOOL's tag namespace. `action-vX.Y.Z` versions the GitHub Action apart
+    #: from the package and must never be read here: one namespace serving two
+    #: artifacts is how a repository ends up unable to release its own 1.0, and
+    #: comparing the action's versions against the package's would recreate the
+    #: conflation that split exists to prevent.
+    TOOL_TAG = re.compile(r"^v(\d+(?:\.\d+)*)$")
+
+    @classmethod
+    def _tool_versions(cls, tags: list[str]) -> list[tuple[int, ...]]:
+        return [tuple(int(part) for part in match.group(1).split("."))
+                for match in (cls.TOOL_TAG.match(tag) for tag in tags) if match]
+
+    @staticmethod
+    def _named_tag() -> str | None:
+        found = re.search(r"tagged `([^`]+)`", (ROOT / "README.md").read_text())
+        return found.group(1) if found else None
+
+    def test_the_readme_names_the_tag_this_version_will_carry(self):
+        """The dropped-`v` guard, and it is TREE-LOCAL on purpose.
+
+        **This half used to be welded to the existence check below, and inherited
+        its ordering problem for no reason.** Whether the README's tag string
+        agrees with the version literal is answerable from the tree alone: in an
+        sdist, in a shallow checkout with no tags, and at every instant of a
+        release. It was previously reachable only when `git tag` returned
+        something, so the environments where a record is most likely to drift
+        unnoticed were the ones not checking it.
+
+        A dropped leading `v` is how these two part company, and the failure is
+        silent: `0.1.1` and `v0.1.1` look alike enough that a reader confirms the
+        version and never notices the tag they were given does not exist.
+        """
+        version = self._version()
+        named = self._named_tag()
+        if version == self.UNRELEASED:
+            assert named is None, (
+                f"the README names the tag {named!r} while the package still "
+                f"reports {self.UNRELEASED}; an unreleased tree must not hand a "
+                f"reader a tag to check out")
+            return
+        assert named, (
+            f"the package reports {version} and the README names no tag. Status "
+            f"should read: tagged `v{version}`")
+        assert named == f"v{version}", (
+            f"the README names the tag {named!r} and the package reports "
+            f"{version}; they must be `v{version}`. A leading v dropped from one "
+            f"of the two is the usual way this happens")
+
     def test_a_tag_and_the_tree_do_not_disagree(self):
-        """Only fires when git can answer AND there is something to compare. An
-        empty tag list proves nothing -- see `_tags` -- and the release commit is
-        legitimately untagged for as long as it takes to tag it."""
+        """The existence half, which is the ONLY part that cannot be answered from
+        the tree -- and it is now allowed to say so.
+
+        **What was wrong with this before.** Its own docstring said the release
+        commit is legitimately untagged for as long as it takes to tag it, and its
+        code tolerated only a repository with NO TAGS AT ALL -- which stopped being
+        true at 0.1.0. So it went red between the commit and the tag, every
+        release, at exactly the moment somebody is most likely to reach for
+        `--no-verify`. That is the failure the version-literal re-anchor removed
+        from the rest of this class; this one assertion never got it.
+
+        Worse than red, it also RACED. CI checks out with `fetch-depth: 0` and
+        fetches whatever tags the remote has at that instant; the runbook pushes
+        master and then the tag, so the release commit's own CI run passes or fails
+        on which of the two won. 0.1.1's run passed that way, on timing.
+
+        **The window is carved out precisely rather than widened.** Only this
+        version may be untagged, and only while no later version is tagged -- a
+        release in flight is always the newest one. Reverting a bump while leaving
+        its tag, or tagging from the wrong commit, both leave a later tag behind
+        and still fail here.
+
+        **Whether the tag was ever MADE is a fact about the remote, not about this
+        tree**, and no assertion here can reach it. The release runbook checks it
+        after pushing, and `/releases/latest` shows it. Saying that out loud in the
+        skip is the honest version; asserting it from a working tree would be a
+        check that is right by luck.
+        """
         tags = self._tags()
         if not tags:
             pytest.skip("no tags visible here; *cannot tell* is not *no tags*")
@@ -171,12 +244,23 @@ class TestTheReleaseRecordsAgree:
         assert version != self.UNRELEASED, (
             f"the repository has tags {tags} and the package still reports "
             f"{self.UNRELEASED}")
-        named = re.search(r"tagged `([^`]+)`", (ROOT / "README.md").read_text())
-        if named:
-            assert named.group(1) in tags, (
-                f"the README names the tag {named.group(1)!r}, which is not among "
-                f"{tags}; a leading v dropped from one of the two is the usual way "
-                f"this happens")
+
+        if f"v{version}" in tags:
+            return
+        current = tuple(int(part) for part in version.split("."))
+        ahead = sorted(t for t in self._tool_versions(tags) if t > current)
+        assert not ahead, (
+            f"v{version} has no tag, and {['v' + '.'.join(map(str, t)) for t in ahead]} "
+            f"name later versions. A release in flight is the only reason this "
+            f"version should be untagged, and a release in flight is always the "
+            f"newest one -- so either a bump was reverted with its tag left behind, "
+            f"or a tag was made from the wrong commit")
+        pytest.skip(
+            f"v{version} is not tagged in this tree. The tag is made OF the commit "
+            f"that sets the version literal, so this is the one legitimate window "
+            f"and `git tag -a v{version}` closes it. Whether the tag was ever made "
+            f"is a fact about the remote rather than this tree: the release runbook "
+            f"checks it after pushing.")
 
 
 class TestNoLinkPointsAtNothing:
