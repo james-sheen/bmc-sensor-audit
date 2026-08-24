@@ -21,12 +21,22 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.1.0**, tagged `v0.1.0`, Apache-2.0, on PyPI as
+**Released — 0.1.1**, tagged `v0.1.1`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
-**What 0.1.0 does not have, since silence about it would be the wrong lesson.**
+**0.1.1 is the consumer's half of two formats.** The person who receives a
+capture can now check it — `validate-walk`, no engine and no hardware — and
+`walk/1` has a written stability statement for a downstream pin to pin to.
+`capture --print-digest` prints a content handle a fleet collector binds to a
+unit on its own side of the line; no identity field enters `walk/1`. Platforms
+whose sensors are discovered at runtime rather than declared can supply a
+reviewed `pdr/1`, and `regression` pairs across a **declared** aggregation-prefix
+change. The engine floor moved to 0.1.8, derived by running the canary against
+every release the old range admitted.
+
+**What 0.1.1 does not have, since silence about it would be the wrong lesson.**
 No capture from **physical** hardware. Every fixture here came from an emulator
 or from upstream, which is described further down rather than implied away. The
 previous version of this paragraph recorded that criterion as honestly open and
@@ -392,7 +402,7 @@ which is how a repository ends up unable to release its own 1.0.
 
 | Tag | Versions | Installs |
 |---|---|---|
-| `v0.1.0` | the tool, on PyPI | — |
+| `v0.1.1` | the tool, on PyPI | — |
 | `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
 
 **`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the
