@@ -114,6 +114,28 @@ RULES = [
          r"\s*:\s*\"(?!\$[A-Za-z_]\w*\")[^\"]+\"",
          "a Redfish inventory field with a value. A committed chassis walk is a "
          "fleet inventory disclosure; capture the parsed sensor set instead"),
+
+    # 9. A repository NICKNAME. Generic, so it ships: the pattern spells out a
+    #    shape, not a name, and reveals nothing by being public.
+    #
+    #    **It refuses rather than substituting, and that is the whole design.**
+    #    There is no correct replacement. A sentence citing an internal
+    #    repository by its house number becomes, under any substitution, *in the
+    #    internal repository* -- grammatical, and still telling a reader nothing
+    #    they can act on. A visible leak turned into an invisible non-sequitur.
+    #    The sentence has to be rewritten for someone who has only THIS
+    #    repository, and only its author can do that.
+    #
+    #    Added after one such nickname reached the commit messages of four
+    #    public repositories at once. The rule already existed in a private
+    #    scrub and would have caught it; the guard that was actually ASKED about
+    #    a commit message had never heard of it. A rule is only as wide as the
+    #    surfaces it is run against.
+    Rule("repository_nickname", r"\b(?:repo|repository)\s*#\s*\d+",
+         "an internal repository nickname. It names a place the reader does not "
+         "have, so rewrite the sentence for someone who has only this repository "
+         "-- there is no substitution that keeps it meaningful",
+         re.IGNORECASE),
 ]
 
 
@@ -205,14 +227,64 @@ def scan(paths: list[Path], root: Path,
     return hits
 
 
+def scan_text(text: str, label: str, rules: list[Rule]) -> list[tuple[Path, int, Rule, str]]:
+    """The same rules, against a string that is not a file.
+
+    **A commit message is a published surface and was not being scanned.** The
+    vocabulary above describes what must never be published; it had only ever
+    been run over files, so every rule in it was silently narrower than the
+    sentence it enforces. An internal nickname reached the commit messages of
+    four public repositories before anyone noticed the gap -- the rule that would
+    have caught it existed, and the surface it needed to cover did not.
+
+    A commit message cannot be corrected once pushed, which makes it the surface
+    where this matters most and the one it was missing.
+    """
+    hits = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if EXEMPT.search(line):
+            continue
+        for rule in rules:
+            found = rule.pattern.search(line)
+            if found:
+                hits.append((Path(label), number, rule, found.group(0)))
+    return hits
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--all", action="store_true",
                         help="scan the whole tree rather than staged content")
+    parser.add_argument("--message", metavar="FILE",
+                        help="scan a commit message instead of files; a message "
+                             "is a published surface and cannot be corrected "
+                             "once pushed")
     parser.add_argument("--root", default=".")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
+
+    if args.message:
+        local = load_local_rules(root)
+        rules = RULES + local
+        try:
+            text = Path(args.message).read_text(encoding="utf-8", errors="replace")
+        except OSError as error:
+            print(f"hygiene: cannot read {args.message}: {error}", file=sys.stderr)
+            return EXIT_ERROR
+        hits = scan_text(text, "(commit message)", rules)
+        if not hits:
+            print(f"hygiene: commit message scanned against {len(rules)} rule(s), "
+                  f"nothing found")
+            return EXIT_CLEAN
+        print(f"hygiene: {len(hits)} finding(s) in the commit message -- "
+              f"refused\n", file=sys.stderr)
+        for path, number, rule, matched in hits:
+            print(f"  {path}:{number}  {rule.name}", file=sys.stderr)
+            print(f"      {matched}", file=sys.stderr)
+            print(f"      {rule.why}\n", file=sys.stderr)
+        return EXIT_FOUND
+
     paths = _tracked_and_untracked(root) if args.all else _staged_files()
     if not paths:
         print("hygiene: nothing to scan")

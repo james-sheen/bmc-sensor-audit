@@ -4,10 +4,27 @@
 # Activated by the same setting as the pre-commit hook:
 #     git config core.hooksPath .githooks
 #
-# A message is the one published surface that can never be corrected. The hygiene
-# check guards files and cannot see the message; this runs the same rules over it.
+# A message is the one published surface that can never be corrected.
 #
-# To commit past it knowingly:   git commit --no-verify
+# **This file used to claim it ran the hygiene rules over the message, and it did
+# not.** It ran only `commit_msg_check.py`, which checks the subject length and
+# insists a three-digit number carries a measurement basis -- both worth having,
+# neither about publication. So the comment described the property that would have
+# stopped an internal repository nickname reaching four public commit messages,
+# while the code did something else entirely. Nothing checked the claim, because it
+# was a claim in a comment.
+#
+# Two checkers now, because they answer two different questions:
+#   hygiene_check.py --message   must this text never be published?
+#   commit_msg_check.py          is this message shaped like the others?
+#
+# Publication first: it is the one that cannot be undone after a push.
+#
+# To commit past both knowingly:   git commit --no-verify
 # Note that --no-verify also disables the pre-commit hygiene sweep. That is why
-# this hook refuses only on objective problems and merely notes the heuristic one.
-exec python3 "$(git rev-parse --show-toplevel)/tools/commit_msg_check.py" "$1"
+# these refuse only on objective problems and merely note the heuristic ones.
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+
+python3 "$ROOT/tools/hygiene_check.py" --message "$1"
+exec python3 "$ROOT/tools/commit_msg_check.py" "$1"

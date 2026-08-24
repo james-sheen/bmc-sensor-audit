@@ -46,6 +46,7 @@ PLANTS = {
     "home_path": 'NOTES = "/home/someone/notes.txt"',  # hygiene: synthetic
     "mac_address": 'MAC = "de:ad:be:ef:00:11"',  # hygiene: synthetic
     "redfish_inventory_field": '{"SerialNumber": "CN7082019L003A"}',  # hygiene: synthetic
+    "repository_nickname": "pinned against the checker in repo #1",  # hygiene: synthetic
 }
 
 # Things that resemble a hazard and are not one. Each is present in real trees.
@@ -62,6 +63,12 @@ NEAR_MISSES = [
     # nine upstream configs produced 18 findings of exactly this shape.
     '{"SerialNumber": "$BOARD_SERIAL_NUMBER"}',
     '{"PartNumber": "$PRODUCT_PART_NUMBER"}',
+    # `repo` sits inside two ordinary words and appears as a URL fragment. A
+    # word-level match would flag all three, and the third is in this README.
+    'the repository holds it',
+    'reported a defect in the walker',
+    'https://github.com/james-sheen/bmc-sensor-audit#readme',
+    'repo number 3 in prose',
 ]
 
 # Values that LOOK like the placeholder above and are not. The narrowing that
