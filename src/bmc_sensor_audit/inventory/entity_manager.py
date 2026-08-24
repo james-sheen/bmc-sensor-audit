@@ -166,6 +166,13 @@ class DeclaredSensor:
     disabled_in_config: bool = False
     part: str | None = None    # the physical device that declares it
     channel: int | None = None # hwmon channel within that device, when it has several
+    # Whether absence of this declaration should count as a regression, when the
+    # source knows and the entity-manager `Type` filter does not apply. `None` is
+    # the entity-manager case: decide from `type`. See `diff.expects_reading` for
+    # why a declaration source that records only READING sensors must say so --
+    # every entry would otherwise classify as an unrecognised Type and never fail
+    # a gate.
+    expects_reading: bool | None = None
 
     @property
     def key(self) -> tuple[str, str | None]:
@@ -213,6 +220,12 @@ class Declaration:
     anomalies: list[Anomaly] = field(default_factory=list)
     unreadable: list[tuple[str, str]] = field(default_factory=list)
     files_read: int = 0
+    # Declaration sources other than the manufacturer's entity-manager files that
+    # contributed to this declaration, in precedence order. Empty is the normal
+    # case. See `inventory.declaration_source`; the provenance of a run that leaned
+    # on one of these has to reach the report, because a reader cannot otherwise
+    # tell a manufacturer's declaration from a snapshot of one machine.
+    sources: list = field(default_factory=list)
 
     def __iter__(self) -> Iterator[DeclaredSensor]:
         return iter(self.sensors)

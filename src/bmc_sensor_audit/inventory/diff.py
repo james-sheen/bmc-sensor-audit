@@ -38,7 +38,8 @@ from .entity_manager import (
 from .redfish import LiveSensor, Walk
 from . import sensor_types
 
-__all__ = ["Finding", "Match", "DiffReport", "compare"]
+__all__ = ["Finding", "Match", "DiffReport", "compare", "normalise_name",
+           "expects_reading"]
 
 # Findings that mean something got worse. The CLI exits non-zero on these so a
 # firmware-upgrade gate can fail a release candidate in CI.
@@ -92,6 +93,12 @@ class DiffReport:
     # reading, keyed by kind. Reported, never silently dropped -- an exclusion
     # nobody can see is indistinguishable from a checker that forgot to look.
     not_sensor_kinds: dict[str, list] = field(default_factory=dict)
+    # Declaration sources other than entity-manager that this report was judged
+    # against. Carried ON THE REPORT rather than passed to each renderer, so a new
+    # output format cannot be added without the provenance coming with it. A reader
+    # who cannot tell a manufacturer's declaration from a snapshot of one machine is
+    # being handed the second while reading it as the first.
+    declaration_sources: list = field(default_factory=list)
 
     @property
     def regressions(self) -> list[Finding]:
@@ -118,7 +125,14 @@ class DiffReport:
         }
 
 
-def _normalise(name: str) -> str:
+def normalise_name(name: str) -> str:
+    """The matcher's notion of one name being the same name as another.
+
+    Public because precedence between declaration sources has to use exactly this
+    function. Two sources declaring `HGX_TEMP0` and `HGX TEMP0` are declaring one
+    sensor, and a merge that kept both would expect it twice and report one of them
+    permanently absent -- a false regression created by the merge itself.
+    """
     return _SEPARATORS.sub("_", name.strip().lower())
 
 
@@ -156,7 +170,7 @@ def _index_live(walk: Walk) -> tuple[dict[str, LiveSensor], dict[str, LiveSensor
     normalised: dict[str, LiveSensor] = {}
     for sensor in walk:
         exact.setdefault(sensor.name, sensor)
-        normalised.setdefault(_normalise(sensor.name), sensor)
+        normalised.setdefault(normalise_name(sensor.name), sensor)
     return exact, normalised
 
 
@@ -179,7 +193,7 @@ def _pair(declaration: Iterable[DeclaredSensor], walk: Walk) -> tuple[list[Match
 
     still_pending: list[DeclaredSensor] = []
     for declared in pending:
-        live = normalised.get(_normalise(declared.name))
+        live = normalised.get(normalise_name(declared.name))
         if live is not None and live.path not in claimed:
             claimed.add(live.path)
             matches.append(Match(declared, live, "normalised"))
@@ -234,6 +248,28 @@ def _close(a: float, b: float, *, rel: float = 1e-6) -> bool:
     return abs(a - b) <= rel * max(1.0, abs(a), abs(b))
 
 
+def expects_reading(sensor: DeclaredSensor) -> bool:
+    """Whether absence of this declaration should count as a regression.
+
+    **The `Type` filter is a fact about entity-manager, not about declarations in
+    general.** It exists because entity-manager declares PID loops, EEPROMs, muxes
+    and GPIO presence detectors exactly like sensors, so a Type this build cannot
+    place is reported and never asserted about.
+
+    A declaration source that only ever records things that were READING carries no
+    such population, and applying the filter to one is not caution -- it is a silent
+    hole. Every entry would classify `UNRECOGNISED` for want of an entity-manager
+    Type, so a sensor that stopped reporting would be counted, printed, and never
+    once fail a gate. That is the exact vacuous pass this tool exists to catch.
+
+    So the source says. `expects_reading is None` means decide from `type`, which is
+    the entity-manager case and the default.
+    """
+    if sensor.expects_reading is not None:
+        return sensor.expects_reading
+    return sensor_types.is_expected_live(sensor.type)
+
+
 def _classify_excluded(declared: list) -> dict:
     """Group the declarations that will not be expected live, by why.
 
@@ -243,9 +279,10 @@ def _classify_excluded(declared: list) -> dict:
     """
     excluded: dict = {}
     for sensor in declared:
+        if expects_reading(sensor):
+            continue
         kind = sensor_types.classify(sensor.type)
-        if kind != sensor_types.SENSOR:
-            excluded.setdefault(kind, []).append(sensor)
+        excluded.setdefault(kind, []).append(sensor)
     return excluded
 
 
@@ -259,7 +296,8 @@ def compare(declaration: Declaration, walk: Walk, *,
     missing on a healthy board is precisely the every-run-red noise that teaches
     people to stop reading the report.
     """
-    report = DiffReport(walk_complete=walk.complete)
+    report = DiffReport(walk_complete=walk.complete,
+                        declaration_sources=list(declaration.sources))
     findings: list[Finding] = []
 
     # EVERY declared sensor is paired, including the ones the config marks
@@ -293,8 +331,7 @@ def compare(declaration: Declaration, walk: Walk, *,
     # counted and REPORTED, never asserted about: claiming a regression for
     # something we cannot classify is the exact false positive being removed here.
     report.not_sensor_kinds = _classify_excluded(unmatched_declared)
-    unmatched_declared = [s for s in unmatched_declared
-                          if sensor_types.is_expected_live(s.type)]
+    unmatched_declared = [s for s in unmatched_declared if expects_reading(s)]
 
     # Anything wrong with the declaration itself travels into the report. A
     # defect in the expectation source is a finding no reading-watcher can see.

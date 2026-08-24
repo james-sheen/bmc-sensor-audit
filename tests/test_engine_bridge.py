@@ -1,6 +1,6 @@
 """The four Stage 2 pillars, run against whatever `arbiter-engine` the pin admits.
 
-This is the canary. `pyproject.toml` declares `arbiter-engine>=0.1.6,<0.2`, which is a
+This is the canary. `pyproject.toml` declares `arbiter-engine>=0.1.8,<0.2`, which is a
 range, and upstream shipped five releases in forty-eight hours. Every behaviour Stage 2
 will depend on is asserted here so a release inside that range cannot change one quietly.
 
@@ -816,6 +816,36 @@ class TestRedundantSignalDisagreementEndToEnd:
         assert any("CONSISTENCY" in d for d in outcome.data_declines)
 
 
+#: The declared efficiency floor for the fixture below. A module constant because
+#: the fixture is now shared: two later classes exercise the same generated model
+#: against different readings, and a fixture reachable from one class only would
+#: have been copied instead.
+LOSS_MARGIN = 0.15
+
+
+@pytest.fixture
+def flowed(tmp_path):
+    """The vendored Mt.Jade declaration, generated with a declared PSU flow."""
+    from bmc_sensor_audit.detect.generator import generate
+    from bmc_sensor_audit.detect.supplemental import load_supplemental
+    from bmc_sensor_audit.inventory.entity_manager import load_declaration
+    path = tmp_path / "supplemental.json"
+    path.write_text(json.dumps({
+        "format": "bmc-sensor-audit/supplemental/1",
+        "provenance": "test fixture; the margin is not a datasheet figure",
+        "flows": [{"input": "PSU0_PINPUT", "outputs": ["PSU0_POUTPUT"],
+                   "loss_margin": LOSS_MARGIN,
+                   "basis": "test fixture: a stand-in for the efficiency floor "
+                            "a real deployment would take off the PSU "
+                            "datasheet. The number is the operator's to supply "
+                            "and this one establishes nothing about Mt.Jade"}]}))
+    upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
+        "fixtures" / "upstream"
+    declaration = load_declaration([str(upstream)])
+    model, manifest = generate(declaration, supplemental=load_supplemental(path))
+    return declaration, model, manifest
+
+
 class TestConservationEndToEnd:
     """PSU efficiency collapse, on the real vendored Mt.Jade declaration.
 
@@ -827,31 +857,9 @@ class TestConservationEndToEnd:
     pin for a pair that is neither templated nor invisible.
     """
 
-    MARGIN = 0.15
+    MARGIN = LOSS_MARGIN
 
-    @pytest.fixture
-    def flowed(self, tmp_path):
-        from bmc_sensor_audit.detect.generator import generate
-        from bmc_sensor_audit.detect.supplemental import load_supplemental
-        from bmc_sensor_audit.inventory.entity_manager import load_declaration
-        path = tmp_path / "supplemental.json"
-        path.write_text(json.dumps({
-            "format": "bmc-sensor-audit/supplemental/1",
-            "provenance": "test fixture; the margin is not a datasheet figure",
-            "flows": [{"input": "PSU0_PINPUT", "outputs": ["PSU0_POUTPUT"],
-                       "loss_margin": self.MARGIN,
-                       "basis": "test fixture: a stand-in for the efficiency floor "
-                                "a real deployment would take off the PSU "
-                                "datasheet. The number is the operator's to supply "
-                                "and this one establishes nothing about Mt.Jade"}]}))
-        upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
-            "fixtures" / "upstream"
-        declaration = load_declaration([str(upstream)])
-        model, manifest = generate(declaration,
-                                   supplemental=load_supplemental(path))
-        return declaration, model, manifest
-
-    def _run(self, flowed, pin_watts, pout_watts, samples=12):
+    def _run(self, flowed, pin_watts, pout_watts, samples=12, drift=0.01):
         from bmc_sensor_audit.detect.feeder import evaluate, feed
         from bmc_sensor_audit.inventory.diff import compare
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
@@ -862,7 +870,7 @@ class TestConservationEndToEnd:
                 "format": "bmc-sensor-audit/walk/1",
                 "chassis": ["/redfish/v1/Chassis/1"], "shapes_seen": ["sensors"],
                 "errors": [],
-                "sensors": [{"name": name, "reading": value + step * 0.01,
+                "sensors": [{"name": name, "reading": value + step * drift,
                              "state": "Enabled", "health": "OK", "thresholds": {},
                              "path": f"/redfish/v1/Chassis/1/Sensors/s{i}"}
                             for i, (name, value) in enumerate(
@@ -938,6 +946,98 @@ class TestConservationEndToEnd:
         outcome = evaluate({"meta": {"schema_version": 1}}, describe, manifest)
         assert len(outcome.unmapped) == 1
         assert "peer_SOMETHING_ELSE" in outcome.unmapped[0]
+
+
+class TestTheZeroInputDeclineArrivedInsideThePin:
+    """0.1.8 gave CONSERVATION a decline where 0.1.6 and 0.1.7 said nothing.
+
+    **This is the canary doing its job, and it took a measurement to find.** The pin
+    is a RANGE. A declared flow whose total input is at or below zero produced an
+    empty problem list on the engine this module was written against, and declines
+    `not_applicable` now -- real on any idle or powered-off rail, and it arrived as
+    a reason the feeder had no member for, printing *declines this build does not
+    recognise*.
+
+    Nothing broke: an unclassified decline is reported prominently and only fails
+    the gate under `--strict-declines`, which is the whole point of the third
+    bucket. The LABEL was wrong, and a label that is wrong about the engine is
+    exactly what this file exists to catch before an operator meets it.
+
+    **The shape had to be measured too.** The obvious test -- feed zero -- passed
+    the first time for the wrong reason: this class's runner drifts each sample by
+    0.01 so STABILITY has something to see, which lifts the window total above zero.
+    A flat rail is what reaches the decline, and a flat rail is also frozen, so the
+    two checks arrive together and are asserted apart.
+    """
+
+    def test_a_rail_flat_at_zero_declines_conservation(self, flowed):
+        _, outcome = TestConservationEndToEnd()._run(flowed, 0.0, 0.0, drift=0.0)
+        assert outcome.inapplicable_declines, (
+            "a declared flow flat at zero produced no decline; on 0.1.8 CONSERVATION "
+            "declines not_applicable when the total input is at or below zero")
+        assert not outcome.unclassified_declines, (
+            "the reason is measured and named; filing it under unrecognised prints a "
+            "sentence about this build that stopped being true")
+
+    def test_the_frozen_finding_is_separate_from_the_decline(self, flowed):
+        """A rail flat at zero is both unbalanceable and dead, and the report has to
+        carry both. A decline that swallowed the run would lose the finding that
+        actually needs an engineer."""
+        _, outcome = TestConservationEndToEnd()._run(flowed, 0.0, 0.0, drift=0.0)
+        # Matched on the manifest's translation, the way the sibling imbalance
+        # assertions in this file are: `findings` carries the operator's sentence,
+        # not the engine's `problem_type`.
+        assert [f for f in outcome.findings if "has not changed" in f], outcome.findings
+        assert outcome.exit_code == 1, "the frozen rail is what fails this gate"
+
+    def test_the_decline_alone_does_not_fail_the_gate(self, flowed):
+        """Isolated on a moving series whose total stays negative, so nothing else
+        fires. A firmware gate that went red because a rail was idle would be
+        switched off within a week, taking the signal with it."""
+        _, outcome = TestConservationEndToEnd()._run(flowed, -5.0, 1.0)
+        assert outcome.inapplicable_declines
+        assert outcome.findings == []
+        assert outcome.exit_code == 0
+
+    def test_strict_declines_still_reaches_it(self):
+        """The flag means *tell me about everything that could not be judged*, and a
+        bucket it could not reach would be a hole in the one thing it promises."""
+        from bmc_sensor_audit.detect.feeder import DetectOutcome
+
+        outcome = DetectOutcome(strict=True)
+        outcome.inapplicable_declines.append("PSU0 [CONSERVATION] not_applicable")
+        assert outcome.exit_code == 1
+
+    def test_a_positive_flow_is_still_judged(self, flowed):
+        """Non-vacuity: the decline is about the DATA, and real data still gets a
+        verdict. A build that declined everything would pass the tests above."""
+        _, outcome = TestConservationEndToEnd()._run(flowed, 800.0, 500.0)
+        assert outcome.findings
+        assert not outcome.inapplicable_declines
+
+
+class TestTheGeneratedModelNeverAsksAnUndeclaredConservation:
+    """0.1.8 also made CONSERVATION decline `no_balance_declared` when an indicator
+    lists the axiom without declaring what balances against what.
+
+    Guarded here as a property of the model this tool GENERATES rather than as a
+    fourth decline bucket. The generator adds the axiom and the block in one place,
+    so the decline can only arrive if that pairing comes apart -- and catching it at
+    generation is catching it before a run rather than after one.
+    """
+
+    def test_every_conservation_indicator_declares_its_balance(self, flowed):
+        _, model, _ = flowed
+        asked = [(entity, indicator)
+                 for entity, indicators in model["domain"]["indicators"].items()
+                 for indicator in indicators
+                 if "CONSERVATION" in indicator.get("axioms", [])]
+        assert asked, "no indicator asks CONSERVATION; this proves nothing"
+        for entity, indicator in asked:
+            block = indicator.get("conservation")
+            assert isinstance(block, dict), f"{entity} asks CONSERVATION with no block"
+            assert block.get("input_property"), f"{entity}: no input_property"
+            assert block.get("output_properties"), f"{entity}: no output_properties"
 
 
 class TestTheAttestationArtifact:

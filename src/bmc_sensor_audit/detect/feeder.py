@@ -62,6 +62,22 @@ _CORE_CASE_REASONS = frozenset({"missing_property", "no_current_value"})
 # Declines that mean "not enough data yet", which is honest and not a failure.
 _DATA_SUFFICIENCY_REASONS = frozenset({"insufficient_samples"})
 
+# Declines that mean the check does not apply to THIS data. Different from both of
+# the above: there is plenty of data and nothing the feeder promised is missing --
+# the question is meaningless against the values that arrived.
+#
+# **Measured on 0.1.8, inside the pin this project already declares.** CONSERVATION
+# declines `not_applicable` when the total input is at or below zero, where 0.1.6
+# and 0.1.7 returned an empty problem list and said nothing at all. A declared power
+# flow on a supply reading zero watts in is the case: real on any idle or powered-off
+# rail, and it arrived here as a reason this build did not recognise.
+#
+# That classification was not WRONG -- the vocabulary genuinely had no member for it
+# -- and it printed *declines this build does not recognise*, which was true on the
+# day it was written and stopped being true the moment somebody measured it. A
+# vocabulary is only derived while somebody keeps deriving it.
+_NOT_APPLICABLE_REASONS = frozenset({"not_applicable"})
+
 
 @dataclass
 class FeedResult:
@@ -92,6 +108,7 @@ class DetectOutcome:
     findings: list[str] = field(default_factory=list)
     core_case_declines: list[str] = field(default_factory=list)
     data_declines: list[str] = field(default_factory=list)
+    inapplicable_declines: list[str] = field(default_factory=list)
     unclassified_declines: list[str] = field(default_factory=list)
     unmapped: list[str] = field(default_factory=list)
     checked: dict = field(default_factory=dict)
@@ -109,7 +126,8 @@ class DetectOutcome:
         """
         if self.findings or self.core_case_declines or self.unmapped:
             return 1
-        if self.strict and (self.data_declines or self.unclassified_declines):
+        if self.strict and (self.data_declines or self.inapplicable_declines
+                            or self.unclassified_declines):
             return 1
         return 0
 
@@ -298,6 +316,8 @@ def evaluate(envelope: dict, describe: dict, manifest: Manifest, *,
             outcome.core_case_declines.append(rendered)
         elif reason in _DATA_SUFFICIENCY_REASONS:
             outcome.data_declines.append(rendered)
+        elif reason in _NOT_APPLICABLE_REASONS:
+            outcome.inapplicable_declines.append(rendered)
         else:
             # Not silently bucketed. A closed vocabulary with a missing member
             # reclassifies the case as its nearest neighbour and reports it with

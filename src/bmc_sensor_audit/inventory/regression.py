@@ -25,15 +25,29 @@ walks that would settle it, and a wrong guess reads exactly like a right one.
 to one walk applies here twice over. A partial *after* walk renders as a firmware
 that deleted a chassis full of sensors, which is the most alarming possible way to
 report a network timeout.
+
+**An aggregation prefix is DECLARED, never inferred.** A BMC that aggregates a
+satellite controller prefixes the resources it republishes, and a prefix that
+changes across a firmware or topology change moves every name behind it at once --
+which reads here as a mass removal plus a mass addition. `--aggregation-prefix
+OLD=NEW` is how an operator states that the two are the same subtree, and the
+pairing it produces is annotated so a reader can see the claim it rests on. Nothing
+auto-pairs: a prefix map is a claim about topology, and topology claims are
+declared. What this module does on its own is *notice* the shape -- a set of names
+sharing one leading string vanishing while an identically-shaped set sharing
+another appears -- and say so, naming the two prefixes it saw. Surfaced, not
+assumed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Sequence
 
 from .redfish import LiveSensor, Walk
 
-__all__ = ["Change", "RegressionReport", "compare_walks", "REGRESSION_KINDS"]
+__all__ = ["Change", "RegressionReport", "compare_walks", "parse_prefix_map",
+           "REGRESSION_KINDS"]
 
 # What counts as *worse*, and therefore fails a firmware gate. The split is not
 # about how surprising a change is: it is about whether something that worked
@@ -68,6 +82,10 @@ class RegressionReport:
     before_count: int = 0
     after_count: int = 0
     paired: int = 0
+    # How many of `paired` were paired only because the operator declared an
+    # aggregation prefix map. Counted separately because it is the one part of the
+    # pairing that rests on a claim this module did not verify.
+    prefix_paired: int = 0
     complete: bool = True
     absence_withheld: bool = False
     # Whether both walks recorded which properties each object carried. A capture
@@ -102,12 +120,50 @@ def _index(walk: Walk) -> tuple[dict[str, LiveSensor], dict[str, LiveSensor]]:
     return by_name, by_path
 
 
-def _pair(before: Walk, after: Walk) -> tuple[list[tuple[LiveSensor, LiveSensor]],
-                                              list[LiveSensor], list[LiveSensor]]:
+def parse_prefix_map(entries: Sequence[str]) -> list[tuple[str, str]]:
+    """Read `OLD=NEW` pairs, or raise `ValueError` naming what was wrong.
+
+    Raises rather than skipping. A prefix map is the operator asserting that two
+    subtrees are the same one, and a typo that silently declared nothing would
+    produce the full mass-removal report the flag was passed to prevent -- with no
+    sign that the flag had not been understood.
+    """
+    parsed: list[tuple[str, str]] = []
+    for entry in entries:
+        old, sep, new = entry.partition("=")
+        if not sep or not old:
+            raise ValueError(
+                f"--aggregation-prefix {entry!r} is not OLD=NEW. The old prefix is "
+                f"the one in the earlier walk; an empty new prefix is allowed and "
+                f"means the prefix was dropped")
+        parsed.append((old, new))
+    return parsed
+
+
+def _apply_prefix(name: str, prefix_map: Sequence[tuple[str, str]]) -> str:
+    """Rewrite a leading declared prefix. First match wins, longest first.
+
+    **Longest first is load-bearing.** Given `HMC_=GPU_` and `HMC_0_=GPU_0_`, a
+    shortest-first pass rewrites `HMC_0_Temp1` with the first entry and produces
+    `GPU_0_Temp1` only by coincidence -- and produces the wrong answer as soon as
+    the two entries disagree about what follows. Sorting here rather than asking the
+    operator to order the flags keeps the map a set of claims rather than a program.
+    """
+    for old, new in sorted(prefix_map, key=lambda pair: len(pair[0]), reverse=True):
+        if name.startswith(old):
+            return new + name[len(old):]
+    return name
+
+
+def _pair(before: Walk, after: Walk,
+          prefix_map: Sequence[tuple[str, str]] = ()) -> tuple[
+              list[tuple[LiveSensor, LiveSensor]], list[LiveSensor], list[LiveSensor],
+              list[tuple[LiveSensor, LiveSensor]]]:
     before_names, before_paths = _index(before)
     after_names, after_paths = _index(after)
 
     pairs: list[tuple[LiveSensor, LiveSensor]] = []
+    prefixed: list[tuple[LiveSensor, LiveSensor]] = []
     claimed_before: set[int] = set()
     claimed_after: set[int] = set()
 
@@ -118,7 +174,31 @@ def _pair(before: Walk, after: Walk) -> tuple[list[tuple[LiveSensor, LiveSensor]
             claimed_before.add(id(old))
             claimed_after.add(id(new))
 
-    # Second pass, over what the name pass could not place. A URI that survived
+    # The declared pass, and it sits here for a reason: an operator's claim about
+    # topology outranks the positional-URI heuristic below, and cannot outrank an
+    # exact name match, which needs no claim at all.
+    #
+    # **The NAME is rewritten and the URI is not.** The name is the string every
+    # dashboard, alert rule and trend query keys on, so it is the field whose change
+    # reads as remove-plus-add. Rewriting the URI as well would pair sensors whose
+    # names had also changed -- and a name change on top of a prefix change is
+    # exactly the case the existing rule refuses to guess at.
+    if prefix_map:
+        for name, old in before_names.items():
+            if id(old) in claimed_before:
+                continue
+            rewritten = _apply_prefix(name, prefix_map)
+            if rewritten == name:
+                continue
+            new = after_names.get(rewritten)
+            if new is None or id(new) in claimed_after:
+                continue
+            pairs.append((old, new))
+            prefixed.append((old, new))
+            claimed_before.add(id(old))
+            claimed_after.add(id(new))
+
+    # Third pass, over what the name passes could not place. A URI that survived
     # while its name changed is the rename case; nothing else in two walks
     # distinguishes it from a coincidence, and the URI is the closest thing
     # Redfish has to a stable identifier for a resource.
@@ -151,7 +231,71 @@ def _pair(before: Walk, after: Walk) -> tuple[list[tuple[LiveSensor, LiveSensor]
 
     gone = [s for s in before if id(s) not in claimed_before]
     arrived = [s for s in after if id(s) not in claimed_after]
-    return pairs, gone, arrived
+    return pairs, gone, arrived, prefixed
+
+
+def _common_prefix(names: Sequence[str]) -> str:
+    """The longest string every name starts with.
+
+    Computed against the lexicographic extremes, which bound it: any character
+    where the smallest and largest names agree is one every name between them
+    agrees on too.
+    """
+    if not names:
+        return ""
+    first, last = min(names), max(names)
+    for index, character in enumerate(first):
+        if index >= len(last) or last[index] != character:
+            return first[:index]
+    return first
+
+
+def _undeclared_prefix_shift(gone: Sequence[LiveSensor],
+                             arrived: Sequence[LiveSensor]) -> Change | None:
+    """A whole subtree vanishing while an identically-shaped one appears.
+
+    **Reports and does not pair.** The removals stay removals and the gate still
+    fails, which is the honest answer: this module has seen a shape consistent with
+    an aggregation prefix change and has no evidence that is what happened. Naming
+    the prefix it saw is what turns a wall of removals into something an operator
+    can act on in one step -- either by declaring the map or by discovering that a
+    controller really did go away.
+
+    **No separator is assumed.** The reported prefix is the measured longest common
+    leading string, whatever it turns out to be. Trimming it back to the last
+    underscore would be guessing at a convention, and the untrimmed string is both
+    true and directly usable as `--aggregation-prefix`.
+
+    **Only when the whole unpaired set shifts together.** Partitioning a mixed set
+    of removals into subtrees is the guess this refuses to make, so a genuinely
+    removed sensor sitting alongside a shifted subtree suppresses the report. That
+    is a miss rather than a wrong answer, and it is the right way round.
+    """
+    if len(gone) < 2 or len(arrived) < 2:
+        # One name changing is a rename, and there is already a pass for that.
+        return None
+    gone_names = [s.name for s in gone]
+    arrived_names = [s.name for s in arrived]
+    if len(set(gone_names)) != len(gone_names) or len(set(arrived_names)) != len(
+            arrived_names):
+        return None
+
+    old_prefix = _common_prefix(gone_names)
+    new_prefix = _common_prefix(arrived_names)
+    if not old_prefix or not new_prefix or old_prefix == new_prefix:
+        return None
+    if {n[len(old_prefix):] for n in gone_names} != {
+            n[len(new_prefix):] for n in arrived_names}:
+        return None
+
+    return Change(
+        "aggregation_prefix_shift", "(topology)",
+        f"{len(gone_names)} sensors whose names all begin {old_prefix!r} are gone, "
+        f"and {len(arrived_names)} whose names all begin {new_prefix!r} have "
+        f"appeared with identical remainders. That is the shape of an aggregation "
+        f"prefix change, and it is reported rather than paired: nothing in two "
+        f"walks says a satellite was renamed instead of replaced. If that is what "
+        f"happened, re-run with --aggregation-prefix {old_prefix}={new_prefix}")
 
 
 def _compare_thresholds(old: LiveSensor, new: LiveSensor, changes: list[Change]) -> None:
@@ -182,18 +326,34 @@ def _close(a: float, b: float, *, rel: float = 1e-6) -> bool:
     return abs(a - b) <= rel * max(1.0, abs(a), abs(b))
 
 
-def compare_walks(before: Walk, after: Walk) -> RegressionReport:
-    """Diff two walks of one machine, oldest first."""
+def compare_walks(before: Walk, after: Walk, *,
+                  prefix_map: Sequence[tuple[str, str]] = ()) -> RegressionReport:
+    """Diff two walks of one machine, oldest first.
+
+    `prefix_map` is the operator's declared aggregation-prefix map, `(old, new)`
+    pairs. Empty is the normal case and changes nothing.
+    """
     report = RegressionReport(before_count=len(before), after_count=len(after),
                               complete=before.complete and after.complete,
                               fields_comparable=before.fields_observed and after.fields_observed)
     changes: list[Change] = []
 
-    pairs, gone, arrived = _pair(before, after)
+    pairs, gone, arrived, prefixed = _pair(before, after, prefix_map)
     report.paired = len(pairs)
+    report.prefix_paired = len(prefixed)
+
+    renamed_by_prefix = {id(new) for _, new in prefixed}
+    for old, new in prefixed:
+        # Annotated, not silent. The pairing rests on a claim the operator made and
+        # this module cannot check, so the report says which claim and over what.
+        changes.append(Change(
+            "aggregation_prefix_paired", new.name,
+            f"paired with {old.name!r} from the earlier walk through the declared "
+            f"prefix map. Everything below about this sensor is judged on that "
+            f"claim; nothing here verified it", old.path, new.path))
 
     for old, new in pairs:
-        if old.name != new.name:
+        if old.name != new.name and id(new) not in renamed_by_prefix:
             changes.append(Change(
                 "sensor_renamed", new.name,
                 f"reported as {old.name!r} in the earlier walk and {new.name!r} in "
@@ -231,6 +391,12 @@ def compare_walks(before: Walk, after: Walk) -> RegressionReport:
                     f"{', '.join(appeared)}", old.path, new.path))
 
     if report.complete:
+        # Emitted before the removals it explains, and it is why this kind sorts
+        # first. A reader who meets forty removals and then the note has already
+        # started writing the incident.
+        shift = _undeclared_prefix_shift(gone, arrived)
+        if shift is not None:
+            changes.append(shift)
         for old in gone:
             changes.append(Change(
                 "sensor_removed", old.name,

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from typing import Any
+from typing import Any, Sequence
 
 from .inventory.diff import DiffReport
 from .inventory.regression import RegressionReport
@@ -24,7 +24,7 @@ from .inventory.redfish import Walk
 __all__ = ["as_json", "as_text", "KIND_ORDER", "regression_as_text",
            "regression_as_json", "strict_fields_as_text", "strict_fields_payload",
            "supplemental_as_text", "unobserved_reason", "unattested_notice",
-           "CHANGE_ORDER"]
+           "declaration_sources_as_text", "CHANGE_ORDER"]
 
 # Most actionable first. `declared_absent` leads because it is the case that no
 # other tool in the stack can produce at all.
@@ -82,9 +82,40 @@ def as_json(report: DiffReport, *, target: str | None = None,
             for f in _ordered(report)
         ],
     }
+    if report.declaration_sources:
+        # Emitted only when one was used, so a run against the manufacturer's files
+        # alone carries no key claiming it had help. Both the prose line and the
+        # fields it was built from: a machine consumer should not have to parse a
+        # sentence, and a person reading raw JSON should not have to reassemble one.
+        payload["declaration_sources"] = [
+            {"format": source.kind, "path": source.path,
+             "platform": source.platform, "firmware": source.firmware,
+             "captured_at": source.captured_at,
+             "derived_from": source.derived_from,
+             "reviewed_by": source.reviewed_by, "reviewed_on": source.reviewed_on,
+             "downgrade": source.is_downgrade,
+             "sensors_supplied": list(source.supplied),
+             "provenance": source.provenance_line()}
+            for source in report.declaration_sources
+        ]
     if walk is not None:
         payload["strict_fields"] = strict_fields_payload(walk)
     return json.dumps(payload, indent=2, sort_keys=False)
+
+
+def declaration_sources_as_text(sources: Sequence[Any]) -> list[str]:
+    """The provenance block, as report lines. Empty when nothing but the
+    manufacturer's own files was read.
+
+    Printed above the counts rather than below the findings. A reader decides how
+    much to believe a number before they read it, not after.
+    """
+    if not sources:
+        return []
+    lines = ["  Declared partly from sources other than entity-manager:"]
+    for source in sources:
+        lines.append(f"    {source.provenance_line()}")
+    return lines + [""]
 
 
 def strict_fields_payload(walk: Walk) -> dict[str, Any]:
@@ -125,6 +156,7 @@ def as_text(report: DiffReport, *, target: str | None = None) -> str:
     lines.append(header)
     lines.append("=" * len(header))
     lines.append("")
+    lines.extend(declaration_sources_as_text(report.declaration_sources))
     lines.append(f"  declared          {counts['declared']:>5}")
     lines.append(f"  matched           {counts['matched']:>5}")
     lines.append(f"    reading         {counts['reading']:>5}")
@@ -184,6 +216,9 @@ def as_text(report: DiffReport, *, target: str | None = None) -> str:
 # Most actionable first, same principle as KIND_ORDER. A removal leads because it
 # is the change a firmware release is most often shipped without noticing.
 CHANGE_ORDER = (
+    # First, because it EXPLAINS the removals below it. A reader who meets forty
+    # removals and then the note has already started writing the incident.
+    "aggregation_prefix_shift",
     "sensor_removed",
     "sensor_renamed",
     "reading_lost",
@@ -197,6 +232,7 @@ CHANGE_ORDER = (
     "threshold_added",
     "sensor_enabled",
     "sensor_added",
+    "aggregation_prefix_paired",
 )
 
 _CHANGE_HEADLINE = {
@@ -213,6 +249,8 @@ _CHANGE_HEADLINE = {
     "threshold_added": "A threshold appeared",
     "sensor_enabled": "Switched on since the earlier walk",
     "sensor_added": "Reported now, absent from the earlier walk",
+    "aggregation_prefix_shift": "A subtree may have moved behind a new prefix",
+    "aggregation_prefix_paired": "Paired across a declared aggregation prefix",
 }
 
 
@@ -231,6 +269,7 @@ def regression_as_json(report: RegressionReport, *, before: str, after: str) -> 
         "sensors_before": report.before_count,
         "sensors_after": report.after_count,
         "paired": report.paired,
+        "paired_through_declared_prefix": report.prefix_paired,
         "counts": report.counts(),
         "regressions": len(report.regressions),
         "changes": [
@@ -255,6 +294,12 @@ def regression_as_text(report: RegressionReport, *, before: str, after: str) -> 
     lines.append(f"  sensors before    {report.before_count:>5}")
     lines.append(f"  sensors after     {report.after_count:>5}")
     lines.append(f"  paired            {report.paired:>5}")
+    if report.prefix_paired:
+        # Broken out rather than folded into `paired`, because these rest on a claim
+        # the operator made and this tool did not check. A summary that hid them
+        # would report a firmware as clean on the strength of a flag.
+        lines.append(f"    of those, through a declared prefix map "
+                     f"{report.prefix_paired:>3}")
 
     if not report.complete:
         lines.append("")
@@ -521,6 +566,22 @@ def detect_as_text(outcome, feed_result) -> str:
             lines.append(f"    {decline}")
         if len(outcome.data_declines) > 5:
             lines.append(f"    ... and {len(outcome.data_declines) - 5} more")
+
+    if outcome.inapplicable_declines:
+        lines.append("")
+        lines.append(f"Did not apply to this data -- "
+                     f"{len(outcome.inapplicable_declines)} "
+                     "(reported, not a failure)")
+        # Its own heading rather than folded in with data sufficiency, because
+        # *not enough data yet* would be the wrong sentence: there is plenty, and
+        # the question is the thing that does not fit it. A declared power flow on
+        # a supply reading zero watts in is the case this reaches.
+        lines.append("  The check ran and the question was meaningless against the")
+        lines.append("  values that arrived. Worth reading; not worth a red gate.")
+        for decline in outcome.inapplicable_declines[:5]:
+            lines.append(f"    {decline}")
+        if len(outcome.inapplicable_declines) > 5:
+            lines.append(f"    ... and {len(outcome.inapplicable_declines) - 5} more")
 
     if outcome.unclassified_declines:
         lines.append("")

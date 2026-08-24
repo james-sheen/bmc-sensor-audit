@@ -22,6 +22,7 @@ whole chassis of healthy sensors as missing.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import ssl
 import time
@@ -34,7 +35,8 @@ from typing import Any, Iterator
 from . import redfish_schema
 
 __all__ = ["LiveSensor", "Walk", "RedfishClient", "walk_chassis", "read_sensor_object",
-           "walk_from_dict", "order_walks", "WALK_FORMAT", "LEGACY_RESOURCES"]
+           "walk_from_dict", "order_walks", "validate_walk", "walk_digest",
+           "WALK_FORMAT", "LEGACY_RESOURCES"]
 
 WALK_FORMAT = "bmc-sensor-audit/walk/1"
 
@@ -542,3 +544,153 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
             obj, item.get("@odata.id") or item.get("path") or str(item.get("Name", "?")),
             item.get("_shape", "sensors"), item.get("_resource", "Sensor")))
     return walk
+
+
+# Every `bound/level` slot this writer can produce, DERIVED from the two threshold
+# maps rather than listed again here. A transcribed vocabulary is one that drifts
+# from the thing it describes the first time a mapping is added, and the validator
+# would then refuse a slot this build had just written.
+_THRESHOLD_SLOTS = frozenset(_MODERN_THRESHOLDS.values()) | frozenset(
+    _LEGACY_THRESHOLDS.values())
+
+
+def validate_walk(payload: Any) -> list[str]:
+    """Everything wrong with this walk file, or an empty list.
+
+    The mirror of `validate_attestation`, and it ships for the same reason that one
+    does: **the person who RECEIVES the file is the one who needs to check it.** A
+    collector ingesting thousands of captures has to be able to refuse a malformed
+    one using the format's own words, not a shape it inferred from the files that
+    happened to arrive first.
+
+    **Malformation only.** A walk that carries no sensors and no errors is a legal
+    capture of a chassis that reports no sensors, and refusing it here would fail a
+    file this tool writes -- a validator that rejects valid input is one people learn
+    to route around, taking the malformed cases with it. What is suspicious rather
+    than wrong is printed by the caller and never scored.
+
+    **Permissive where the reader is permissive.** `captured_at`, `latencies` and
+    `fields_observed` are all absent from captures written before those fields
+    existed, and `walk_from_dict` reads such a file correctly. Absent is therefore
+    accepted; present-and-the-wrong-type is not, because that is the case where the
+    reader takes a value it cannot use.
+
+    Returns problems rather than raising, so a caller reports all of them at once
+    instead of one per run.
+
+    **Imports nothing outside the standard library**, and in particular no engine: a
+    walk is JSON and checking one is a Stage 1 operation.
+    """
+    problems: list[str] = []
+    if not isinstance(payload, dict):
+        return [f"the walk is {type(payload).__name__}, not an object"]
+
+    declared = payload.get("format")
+    if declared != WALK_FORMAT:
+        problems.append(f"format is {declared!r}, this build reads {WALK_FORMAT!r}")
+
+    if not isinstance(payload.get("sensors"), list):
+        # Everything below iterates it, so reporting a type error and then every
+        # consequence of it names one fault many times over. Same split as the
+        # attestation validator, and for the same reason.
+        return problems + ["'sensors' is missing or is not a list"]
+
+    for key in ("chassis", "shapes_seen", "errors", "latencies"):
+        if key in payload and not isinstance(payload[key], list):
+            problems.append(f"{key!r} is present and is not a list")
+    if payload.get("captured_at") is not None and not isinstance(
+            payload["captured_at"], str):
+        problems.append("'captured_at' is present and is not a string")
+    if "fields_observed" in payload and not isinstance(
+            payload["fields_observed"], bool):
+        problems.append("'fields_observed' is present and is not a boolean")
+
+    observed = bool(payload.get("fields_observed", False))
+    for index, item in enumerate(payload["sensors"]):
+        where = f"sensors[{index}]"
+        if not isinstance(item, dict):
+            problems.append(f"{where} is {type(item).__name__}, not an object")
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            # The reader indexes this key directly, so a capture without it raises
+            # rather than degrading. Naming it here is what turns an unreadable file
+            # into a reported one.
+            problems.append(f"{where} carries no 'name'; every other field on a "
+                            f"sensor is optional and this one is the identity")
+            continue
+        where = f"{where} ({name})"
+        if not _is_number_or_absent(item.get("reading")):
+            problems.append(f"{where} has a non-numeric 'reading'")
+        problems.extend(_threshold_problems(item, where))
+        undeclared = item.get("undeclared")
+        if undeclared is not None:
+            if not isinstance(undeclared, list) or not all(
+                    isinstance(n, str) for n in undeclared):
+                problems.append(f"{where} has an 'undeclared' that is not a list of "
+                                f"property names")
+            elif undeclared and not observed:
+                # The contradiction worth catching, and the only cross-field rule
+                # here. `fields_observed` false says nobody compared this object
+                # against the schema; an `undeclared` list says somebody did and
+                # found something. A reader trusting the flag would report a clean
+                # board while the file in front of it names the drift.
+                problems.append(
+                    f"{where} names undeclared properties while 'fields_observed' "
+                    f"is false; the walk says nobody looked and the sensor says "
+                    f"somebody did")
+    return problems
+
+
+def _is_number_or_absent(value: Any) -> bool:
+    """`bool` is a subclass of `int`, so it passes an `isinstance` number test.
+
+    A capture carrying `"reading": true` would otherwise validate and then rehydrate
+    into a sensor reading 1.0 -- a number nothing measured, in the one field the
+    whole tool is pointed at.
+    """
+    if value is None:
+        return True
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _threshold_problems(item: dict, where: str) -> list[str]:
+    thresholds = item.get("thresholds")
+    if thresholds is None:
+        return []
+    if not isinstance(thresholds, dict):
+        return [f"{where} has a 'thresholds' that is not an object"]
+    problems: list[str] = []
+    for slot, value in thresholds.items():
+        bound, _, level = str(slot).partition("/")
+        if (bound, level) not in _THRESHOLD_SLOTS:
+            problems.append(
+                f"{where} carries a threshold slot {slot!r}, which this build does "
+                f"not write. A slot it cannot name is one it cannot compare")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            problems.append(f"{where} threshold {slot!r} is not a number")
+    return problems
+
+
+def walk_digest(raw: bytes | str) -> str:
+    """A content handle for one capture: `sha256:` and the hex digest of the FILE.
+
+    **Over the bytes, not over a re-serialisation of them.** A canonical-JSON digest
+    would survive re-indentation, and it would also require every consumer to
+    reproduce one language's float formatting exactly before it could agree with
+    this one. The bytes are what the collector received, `sha256sum` computes the
+    same value in any language and on any machine, and a recipient can check the
+    handle without trusting -- or installing -- this tool at all.
+
+    The cost is stated rather than hidden: rewriting the file changes the handle,
+    even where the walk is unchanged. That is correct for a handle on a received
+    artifact and wrong for one on a walk's meaning, and this is the first.
+
+    **This is deliberately not identity.** It says which capture, never which
+    machine. Binding a capture to a unit happens outside, in the layer whose job is
+    to name things: the collector holds `{unit_key, digest, walk_ref}` and this tool
+    never sees `unit_key`. No identity field enters `walk/1`.
+    """
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()

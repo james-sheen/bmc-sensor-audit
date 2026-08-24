@@ -369,10 +369,11 @@ class TestTheEnvelopeSchemaVersionIsChecked:
         assert str(ENVELOPE_SCHEMA_VERSION) in outcome.schema_mismatch
 
     def test_an_absent_version_is_not_a_mismatch(self, built):
-        """0.1.6 is inside this project's pin and predates the field. Reading absent
-        as wrong would refuse an engine the project supports -- the same shape as
-        reading a missing introspection key as *unsupported* rather than *empty*,
-        which this repository has already been caught by once."""
+        """Absent is not wrong. Engines before 0.1.7 predate the field entirely, and
+        the pin has since been re-derived past them -- but the rule is about the
+        SHAPE, not about which releases are admitted today: reading a missing key as
+        *unsupported* rather than *empty* is a mistake this repository has already
+        been caught by once, and tightening a pin does not stop it being one."""
         _, _, manifest = built
         outcome = evaluate(self._envelope(_ABSENT), {}, manifest)
         assert outcome.schema_mismatch is None

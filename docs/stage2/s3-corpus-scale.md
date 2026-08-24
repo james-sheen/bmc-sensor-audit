@@ -7,6 +7,12 @@ finish in a time a CI gate can live with, and where does the cost sit?
 **Measured 2026-08-20** against `arbiter-engine` 0.1.7 — the version the declared pin
 `>=0.1.6,<0.2` resolves to today — on the development sandbox. Five rounds.
 
+> **Note added 2026-08-24.** The pin has since been re-derived to `>=0.1.8,<0.2`,
+> because the canary showed 0.1.6 failing eleven of its assertions and 0.1.7 two.
+> The sentence above is left as written: it records the conditions this measurement
+> was taken under, and a dated measurement that quietly acquires today's pin is a
+> measurement nobody can reproduce.
+
 ## Answer
 
 **0.35 s end to end.** Nothing here needs attention, and the shape is worth recording

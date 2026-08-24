@@ -1,6 +1,6 @@
 # Does the engine still behave the way Stage 2 assumes?
 #
-# `pyproject.toml` declares `arbiter-engine>=0.1.6,<0.2`. That is a RANGE, and upstream
+# `pyproject.toml` declares `arbiter-engine>=0.1.8,<0.2`. That is a RANGE, and upstream
 # shipped five releases in forty-eight hours. Everything Stage 2 depends on -- four
 # behavioural pillars and two payload locations -- can therefore change without this
 # repository changing at all, and without anybody choosing it.
@@ -42,7 +42,7 @@ jobs:
         # range is what gets tested.
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet "arbiter-engine>=0.1.6,<0.2" pytest
+          python3 -m pip install --quiet "arbiter-engine>=0.1.8,<0.2" pytest
           echo "resolved:"
           python3 -m pip show arbiter-engine | sed -n 's/^Version: /  arbiter-engine /p'
 

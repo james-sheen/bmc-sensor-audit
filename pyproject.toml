@@ -35,7 +35,13 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 dependencies = []
 
 [project.optional-dependencies]
-detect = ["arbiter-engine>=0.1.6,<0.2"]
+# **The floor is DERIVED, not chosen.** Every published release inside the range was
+# run against `tests/test_engine_bridge.py`, which is the only thing that can answer
+# what this project actually needs: 0.1.6 fails 11 of its assertions, 0.1.7 fails 2,
+# 0.1.8 passes. The declared floor had been 0.1.6 and was already false by one release
+# before anybody re-derived it -- a pin is a claim, and this one had never been
+# measured after the engine grew the behaviour Stage 2 came to depend on.
+detect = ["arbiter-engine>=0.1.8,<0.2"]
 dev = ["pytest>=7"]
 
 [project.scripts]

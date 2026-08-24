@@ -43,13 +43,15 @@ belongs in this paragraph.
 | Declaration reader | working — 349/349 upstream configs parse at the pinned revision |
 | Redfish walk | working — both tree shapes, standard library only |
 | Coverage diff | working — three-way classification, thresholds, reverse direction |
-| Walk capture | working — `capture` writes a walk for a before/after gate |
-| Firmware regression gate | working — `regression` diffs two captures: removed, renamed, re-thresholded |
+| Walk capture | working — `capture` writes a walk for a before/after gate, and `--print-digest` prints a content handle for it |
+| Walk validation | working — `validate-walk` checks a capture against the format it declares, with no engine and no hardware; `walk/1` has a stability statement a downstream pin can pin to |
+| Declaration sources | working — `pdr/1` and `fleet-baseline/1` via `--declaration`, layered under the manufacturer's files. A candidate refuses to be consumed until somebody reviews it |
+| Firmware regression gate | working — `regression` diffs two captures: removed, renamed, re-thresholded, and pairs across a **declared** aggregation-prefix change |
 | Field strictness | working — `coverage --strict-fields`, against property sets derived from DMTF's schemas |
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 463 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 579 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison (Stage 3) | not started |
@@ -122,6 +124,29 @@ PYTHONPATH=src python3 -m bmc_sensor_audit.cli validate-attestation attestation.
 
 The format is documented in
 [`docs/attestation-format.md`](docs/attestation-format.md).
+
+A recorded walk is checkable the same way, and by the person who receives one:
+
+```
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli validate-walk before.json --print-digest
+```
+
+`capture --print-digest` prints the same handle when the file is written — the
+SHA-256 of the bytes, which `sha256sum` reproduces. A fleet collector binds
+`{unit_key, digest, walk_ref}` on its own side of the line; **no identity field
+enters `walk/1`, ever.** See [`docs/walk-format.md`](docs/walk-format.md).
+
+Where a platform's sensors arrive as runtime self-description and have no
+entity-manager entry — PLDM PDRs and NSM discovery on NVIDIA-managed boards — a
+reviewed `pdr/1` supplies the expectation the manufacturer's files do not:
+
+```
+PYTHONPATH=src python3 -m bmc_sensor_audit.cli coverage --config <configs> --walk before.json --declaration hgx.json
+```
+
+It never overrides entity-manager, every run that used one prints its provenance,
+and a candidate is refused until somebody puts their name to it. See
+[`docs/declaration-sources.md`](docs/declaration-sources.md).
 
 Or install it from PyPI and use the console script, which needs no `PYTHONPATH`:
 
@@ -258,6 +283,17 @@ firmware that had renamed nothing. So the units and resource type have to agree
 too. Where a name and a URI both changed, the report shows one removal and one
 addition and says so: nothing in two walks settles which addition replaced which
 removal, and a wrong guess reads exactly like a right one.
+
+**An aggregation prefix is declared, never inferred.** A BMC that aggregates a
+satellite controller republishes its resources under a prefix, and a prefix that
+changes across a firmware or topology update moves every name behind it at once —
+a mass removal plus a mass addition on a machine that lost nothing.
+`--aggregation-prefix OLD=NEW` is the operator stating that the two subtrees are
+the same one; the pairings it produces are counted separately and annotated with
+the claim they rest on, because nothing here verified it. A name that changed *as
+well as* the prefix still refuses to pair. Without the flag nothing auto-pairs —
+what the tool does on its own is notice the shape, name both prefixes it saw, and
+print the flag that would declare them.
 
 **Field strictness.** `coverage --strict-fields` names the properties a sensor
 object carries that the published Redfish schema does not declare — the early
@@ -579,6 +615,15 @@ a diff is safe to publish.
 
 ## Still open
 
+- **`--strict-fields` has not met an NVIDIA-class capture.** The property sets are
+  derived from DMTF's schemas and are resource-type aware, and every capture they
+  have been run against is an OpenBMC one. What an energy or power `Sensor` object
+  on a DGX or HGX board reports, and whether a paginated Sensors collection walks
+  correctly, is **unmeasured** — so this is a verification item and it ships
+  nothing. When it is measured, the sets grow **from the spec and never from the
+  observation**: the rule that built them is the rule that grows them, and a set
+  extended to match one machine is a set that agrees with that machine by
+  construction.
 - **The corpus-wide totals are still not reproducible, though the findings now
   are.** Thirteen upstream configurations are vendored verbatim under
   `tests/fixtures/upstream/`, with Intel's copyright and the upstream licence

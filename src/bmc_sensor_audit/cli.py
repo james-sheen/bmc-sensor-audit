@@ -24,11 +24,14 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from .inventory.declaration_source import (DeclarationSourceError,
+                                           candidate_from_walk,
+                                           load_declaration_source, merge_sources)
 from .inventory.diff import compare
 from .inventory.entity_manager import load_declaration
-from .inventory.redfish import (RedfishClient, Walk, order_walks, walk_chassis,
-                                walk_from_dict)
-from .inventory.regression import compare_walks
+from .inventory.redfish import (RedfishClient, Walk, order_walks, validate_walk,
+                                walk_chassis, walk_digest, walk_from_dict)
+from .inventory.regression import compare_walks, parse_prefix_map
 from .report import (as_json, as_text, regression_as_json, regression_as_text,
                      strict_fields_as_text)
 
@@ -73,8 +76,15 @@ def _client(args: argparse.Namespace) -> RedfishClient:
 def _cmd_capture(args: argparse.Namespace) -> int:
     """Record a walk to disk, for diffing later or for a before/after gate."""
     walk = walk_chassis(_client(args))
-    Path(args.out).write_text(json.dumps(walk.to_dict(), indent=2))
+    text = json.dumps(walk.to_dict(), indent=2)
+    Path(args.out).write_text(text)
     print(f"wrote {len(walk)} sensor(s) to {args.out}")
+    if args.print_digest:
+        # The whole of the fleet handle, and deliberately the whole of it. The
+        # collector wraps `{unit_key, digest, walk_ref}` in its own envelope, on its
+        # own side of the identity line; this tool prints which capture and never
+        # learns which machine.
+        print(f"  digest      {walk_digest(text)}")
     print(f"  chassis     {len(walk.chassis)}")
     print(f"  tree shapes {sorted(walk.shapes_seen) or '(none found)'}")
     if walk.latencies:
@@ -108,8 +118,67 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     return EXIT_CLEAN
 
 
+def _cmd_declare_candidate(args: argparse.Namespace) -> int:
+    """Derive a `pdr/1` CANDIDATE from a walk, which asserts nothing.
+
+    **The circularity hazard is the founding problem of this tool, one door over.**
+    A declaration derived from a walk of an unprovisioned board is an empty
+    declaration that reads healthy, and nothing inside the file can tell that from a
+    good one. So what is written here carries `reviewed: null` and is refused by
+    `coverage` and `detect` until a person adds their name.
+
+    `--candidate` is required rather than implied. The flag is the operator saying
+    they know what this produces, and a command that silently emitted an
+    assert-nothing file would eventually be read as one that asserts something.
+    """
+    # argparse cannot express *required with this other flag*, so it is checked
+    # here. Named one at a time rather than as one message about three flags: an
+    # error listing everything that could be wrong is one nobody reads to the end.
+    for flag, value, why in (
+            ("--candidate", args.candidate,
+             "what this writes asserts nothing, and the flag is you saying so"),
+            ("--out", args.out, "there is nowhere to write it"),
+            ("--platform", args.platform,
+             "a declaration scoped to nothing in particular is one nobody can tell "
+             "was pointed at the wrong machine")):
+        if not value:
+            print(f"--from-walk needs {flag}: {why}", file=sys.stderr)
+            return EXIT_INCOMPLETE
+
+    walk = _load_recorded_walk(args.from_walk)
+    try:
+        payload = candidate_from_walk(walk, platform=args.platform,
+                                      firmware=args.firmware,
+                                      source_path=args.from_walk)
+    except DeclarationSourceError as error:
+        print(f"{args.from_walk}: {error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    Path(args.out).write_text(json.dumps(payload, indent=2))
+    print(f"wrote a {payload['format']} CANDIDATE to {args.out}")
+    print(f"  platform     {payload['platform']}")
+    print(f"  firmware     {payload['firmware'] or '(unstated)'}")
+    print(f"  sensors      {len(payload['sensors'])}")
+    print("  reviewed     null")
+    print("\nThis file asserts nothing and will be REFUSED by coverage and detect.")
+    print("Read it against the platform's documentation, then add:")
+    print('    "reviewed": {"by": "<name>", "on": "<date>"}')
+    return EXIT_CLEAN
+
+
 def _cmd_declare(args: argparse.Namespace) -> int:
+    if args.from_walk:
+        return _cmd_declare_candidate(args)
+
     declaration = load_declaration(args.config)
+    declaration, refusal = _with_declaration_sources(declaration, args.declaration)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return EXIT_INCOMPLETE
+    for source in declaration.sources:
+        # Printed here too, so an operator can check a declaration file loads and
+        # see what it claims BEFORE pointing a gate at it.
+        print(source.provenance_line())
     print(f"read {declaration.files_read} file(s) from {len(args.config)} path(s)")
     print(f"  sensors declared   {len(declaration):>5}")
     print(f"  templated names    {len(declaration.templated):>5}")
@@ -145,6 +214,28 @@ def _cmd_declare(args: argparse.Namespace) -> int:
 
     # An unreadable config is not a clean board; it is an unknown one.
     return EXIT_INCOMPLETE if declaration.unreadable else EXIT_CLEAN
+
+
+def _with_declaration_sources(declaration, paths):
+    """Layer any `--declaration` files under the manufacturer's declaration.
+
+    Returns `(declaration, None)` or `(None, message)`. A refusal stops the run
+    rather than degrading it, for the same reason a bad supplemental file does: a
+    source that half-loaded would produce a report whose clean rows and absent rows
+    came from different populations, and nothing downstream could tell which.
+
+    **The candidate refusal arrives here**, before a single sensor is compared, so
+    an unreviewed declaration can never contribute a row to any report.
+    """
+    if not paths:
+        return declaration, None
+    sources = []
+    for path in paths:
+        try:
+            sources.append(load_declaration_source(path))
+        except DeclarationSourceError as error:
+            return None, str(error)
+    return merge_sources(declaration, sources), None
 
 
 def _report_unreadable(declaration) -> int:
@@ -255,6 +346,10 @@ def _report_uncomparable_fields(before: Walk, after: Walk, requested: bool) -> i
 
 def _cmd_coverage(args: argparse.Namespace) -> int:
     declaration = load_declaration(args.config)
+    declaration, refusal = _with_declaration_sources(declaration, args.declaration)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return EXIT_INCOMPLETE
     if not declaration.sensors and not declaration.unreadable:
         print("no sensors declared by any file under the given paths", file=sys.stderr)
         return EXIT_INCOMPLETE
@@ -303,6 +398,10 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     installed.
     """
     declaration = load_declaration(args.config)
+    declaration, refusal = _with_declaration_sources(declaration, args.declaration)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return EXIT_INCOMPLETE
     if not declaration.sensors and not declaration.unreadable:
         print("no sensors declared by any file under the given paths", file=sys.stderr)
         return EXIT_INCOMPLETE
@@ -455,6 +554,14 @@ def _cmd_regression(args: argparse.Namespace) -> int:
     it runs -- the flashing station has the captures and often has neither the
     entity-manager tree nor a route back to the machine by the time anyone looks.
     """
+    try:
+        prefix_map = parse_prefix_map(args.aggregation_prefix or [])
+    except ValueError as error:
+        # Before either walk is read, so a mistyped flag costs nothing and is not
+        # buried under a report. Exit 2: the run could not be made as asked.
+        print(error, file=sys.stderr)
+        return EXIT_INCOMPLETE
+
     before = _load_recorded_walk(args.before)
     after = _load_recorded_walk(args.after)
 
@@ -470,7 +577,7 @@ def _cmd_regression(args: argparse.Namespace) -> int:
               f"addition and reads like a clean upgrade.", file=sys.stderr)
         return EXIT_INCOMPLETE
 
-    report = compare_walks(before, after)
+    report = compare_walks(before, after, prefix_map=prefix_map)
     print(regression_as_json(report, before=args.before, after=args.after) if args.json
           else regression_as_text(report, before=args.before, after=args.after))
 
@@ -532,6 +639,72 @@ def _cmd_validate_attestation(args: argparse.Namespace) -> int:
     return EXIT_CLEAN
 
 
+def _cmd_validate_walk(args: argparse.Namespace) -> int:
+    """Check a recorded walk against the format it declares.
+
+    The mirror of `validate-attestation`, and it exists for the same reason: the
+    person who RECEIVES the file is the one who needs to check it. A fleet collector
+    ingesting captures from machines it does not own has to be able to refuse a
+    malformed one in the format's own words.
+
+    Reads the bytes rather than the text, because the digest is over the bytes and
+    computing it from a decoded-then-re-encoded string would be a different number
+    on any file this build did not write.
+    """
+    try:
+        raw = Path(args.path).read_bytes()
+    except OSError as error:
+        print(f"cannot read {args.path}: {error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        print(f"{args.path} is not parseable as JSON: {error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+
+    problems = validate_walk(payload)
+    if problems:
+        print(f"{args.path}: {len(problems)} problem(s)", file=sys.stderr)
+        for problem in problems:
+            print(f"    {problem}", file=sys.stderr)
+        return EXIT_REGRESSION
+
+    sensors = payload["sensors"]
+    errors = payload.get("errors") or []
+    print(f"{args.path}: valid {payload['format']}")
+    if args.print_digest:
+        print(f"  digest          {walk_digest(raw)}")
+    print(f"  sensors         {len(sensors)}")
+    print(f"  captured at     {payload.get('captured_at') or '(unstamped)'}")
+    # Both of these are legal and both change what the file can be used for, so
+    # they are stated on every run rather than only when they bite. A capture with
+    # no record of object properties supports no strictness question, and one that
+    # did not complete cannot be told apart from a machine that lost sensors.
+    print(f"  fields observed {'yes' if payload.get('fields_observed') else 'no'}")
+    if not sensors:
+        print("  ** this walk records no sensors at all. That is a valid capture of "
+              "a chassis reporting none, and it is also what a walk of the wrong "
+              "target looks like **")
+    if errors:
+        print(f"  ** INCOMPLETE -- {len(errors)} fetch(es) failed. Absence in this "
+              f"walk cannot be told apart from a subtree that was never read **")
+        if args.require_complete:
+            # The flag is the ask, and asking is what makes the rule apply -- the
+            # same shape as `--strict-fields`. Flooring by default would refuse the
+            # partial captures `capture` deliberately writes and keeps, which are
+            # evidence about which subtree failed and are worth storing.
+            print("\ncompleteness was required and this walk did not complete, so "
+                  "this run does not exit clean.", file=sys.stderr)
+            return EXIT_INCOMPLETE
+    return EXIT_CLEAN
+
+
+_DECLARATION_HELP = (
+    "a pdr/1 or fleet-baseline/1 declaration, layered UNDER the manufacturer's "
+    "entity-manager files: it covers what they do not declare and never overrides "
+    "them. Repeatable. Refused unless it carries a reviewed marker")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bmc-sensor-audit",
@@ -540,14 +713,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     declare = subparsers.add_parser(
         "declare", help="read the configuration and report what it declares")
-    declare.add_argument("--config", required=True, action="append",
-                         help="entity-manager JSON file or directory (repeatable)")
+    declare_source = declare.add_mutually_exclusive_group(required=True)
+    declare_source.add_argument("--config", action="append",
+                                help="entity-manager JSON file or directory "
+                                     "(repeatable)")
+    declare_source.add_argument("--from-walk", metavar="WALK",
+                                help="derive a pdr/1 CANDIDATE from a recorded walk, "
+                                     "for platforms whose sensors arrive as runtime "
+                                     "self-description and have no entity-manager "
+                                     "entry. Requires --candidate")
+    declare.add_argument("--declaration", action="append", metavar="PATH",
+                         help=_DECLARATION_HELP)
+    declare.add_argument("--candidate", action="store_true",
+                         help="required with --from-walk: acknowledges that what is "
+                              "written asserts nothing and will be refused until "
+                              "somebody reviews it")
+    declare.add_argument("--out", help="where to write the candidate")
+    declare.add_argument("--platform",
+                         help="what this declaration is scoped to, e.g. the board or "
+                              "system model. Required with --from-walk")
+    declare.add_argument("--firmware",
+                         help="the firmware version the walk was taken at; discovered "
+                              "inventory moves with firmware")
     declare.set_defaults(func=_cmd_declare)
 
     coverage = subparsers.add_parser(
         "coverage", help="diff a declaration against what a machine reports")
     coverage.add_argument("--config", required=True, action="append",
                           help="entity-manager JSON file or directory (repeatable)")
+    coverage.add_argument("--declaration", action="append", metavar="PATH",
+                          help=_DECLARATION_HELP)
     source = coverage.add_mutually_exclusive_group(required=True)
     source.add_argument("--target", help="Redfish base URL, e.g. https://bmc.example")
     source.add_argument("--walk", help="a recorded walk, instead of live hardware")
@@ -576,12 +771,20 @@ def build_parser() -> argparse.ArgumentParser:
                             help="also apply field strictness, and exit 2 if either "
                                  "capture carries no record of object properties, "
                                  "so drift cannot be compared")
+    regression.add_argument("--aggregation-prefix", action="append", metavar="OLD=NEW",
+                            help="declare that sensor names starting OLD in the "
+                                 "earlier walk start NEW in this one -- an "
+                                 "aggregated satellite republished under a new "
+                                 "prefix. Repeatable. Nothing is inferred: a prefix "
+                                 "map is a claim about topology")
     regression.set_defaults(func=_cmd_regression)
 
     detect = subparsers.add_parser(
         "detect", help="coverage plus liveness, in one run and one exit code")
     detect.add_argument("--config", required=True, action="append",
                         help="entity-manager JSON file or directory (repeatable)")
+    detect.add_argument("--declaration", action="append", metavar="PATH",
+                        help=_DECLARATION_HELP)
     detect_source = detect.add_mutually_exclusive_group(required=True)
     detect_source.add_argument("--target", help="Redfish base URL")
     detect_source.add_argument("--walk", action="append",
@@ -617,10 +820,28 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("path", help="the attestation JSON to check")
     validate.set_defaults(func=_cmd_validate_attestation)
 
+    validate_walk_cmd = subparsers.add_parser(
+        "validate-walk",
+        help="check a recorded walk against the format it declares")
+    validate_walk_cmd.add_argument("path", help="the walk JSON to check")
+    validate_walk_cmd.add_argument(
+        "--print-digest", action="store_true",
+        help="also print the content handle for this file, the same value "
+             "capture --print-digest printed when it was written")
+    validate_walk_cmd.add_argument(
+        "--require-complete", action="store_true",
+        help="exit 2 if the walk did not complete; a partial capture is valid "
+             "walk/1 and must not be used as a baseline")
+    validate_walk_cmd.set_defaults(func=_cmd_validate_walk)
+
     capture = subparsers.add_parser(
         "capture", help="record a walk to disk, for a before/after gate")
     capture.add_argument("--target", required=True)
     capture.add_argument("--out", required=True, help="file to write")
+    capture.add_argument("--print-digest", action="store_true",
+                         help="also print a SHA-256 content handle for the file, so "
+                              "a collector can bind it to a unit on its own side of "
+                              "the identity line")
     capture.add_argument("--username")
     capture.add_argument("--password")
     capture.add_argument("--insecure", action="store_true",
