@@ -144,6 +144,22 @@ def _client(args: argparse.Namespace) -> RedfishClient:
                          pin_sha256=getattr(args, "pin_sha256", None))
 
 
+#: The one line of `capture` output that is a CONTRACT rather than prose.
+#:
+#: **Reported from outside (issue #6), against a fix from an hour earlier.** A
+#: skip and a walk both exit `0` -- correctly, because a skip is clean, and a
+#: fourth exit code would break the three-valued vocabulary every tool in this
+#: family shares. So the only difference was a printed sentence, and a consumer
+#: had to match prose that nothing promised to keep.
+#:
+#: This is the promise instead: `capture` always prints exactly one `OUTCOME `
+#: line, its value is one of `OUTCOMES`, and both are covered by the same
+#: stability statement as `walk/1`. Everything else `capture` prints is prose
+#: and may be reworded at any time.
+OUTCOME = "OUTCOME "
+OUTCOMES = ("walked", "unchanged")
+
+
 def _cmd_capture(args: argparse.Namespace) -> int:
     """Record a walk to disk, for diffing later or for a before/after gate."""
     client = _client(args)
@@ -170,12 +186,14 @@ def _cmd_capture(args: argparse.Namespace) -> int:
                 print("  this answers membership only: a threshold or unit "
                       "changed on a sensor that stayed present would not show "
                       "here. Drop --etag-cache to compare configuration")
+                print(f"{OUTCOME}unchanged")
                 return EXIT_CLEAN
             print(f"  {why}; walking in full")
 
     walk = walk_chassis(client)
     text = json.dumps(walk.to_dict(), indent=2)
     Path(args.out).write_text(text)
+    print(f"{OUTCOME}walked")
     print(f"wrote {len(walk)} sensor(s) to {args.out}")
     if args.print_digest:
         # The whole of the fleet handle, and deliberately the whole of it. The

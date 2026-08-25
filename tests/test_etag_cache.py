@@ -232,3 +232,82 @@ class TestTheCaptureCommand:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestTheOutcomeLineIsAContract:
+    """Issue #6, reported from outside against a fix an hour old.
+
+    A skip and a walk both exit `0` -- correctly: a skip is clean, and a fourth
+    exit code would break the three-valued vocabulary every tool in this family
+    shares. **The reported ask offered a distinct exit code and that option was
+    wrong**, which is why this is a line rather than a code.
+
+    So `capture` prints exactly one `OUTCOME ` line, always, and its value is
+    the machine-readable answer to *did a walk happen*. The prose around it may
+    be reworded; this may not.
+    """
+
+    def _run(self, capsys, *argv):
+        code = cli.main(list(argv))
+        return code, capsys.readouterr().out
+
+    def _outcomes(self, printed):
+        return [line[len(cli.OUTCOME):] for line in printed.splitlines()
+                if line.startswith(cli.OUTCOME)]
+
+    def test_a_walk_says_walked(self, tmp_path, capsys):
+        out = tmp_path / "walk.json"
+        with serve(_machine()) as url:
+            _, printed = self._run(capsys, "capture", "--target", url,
+                                   "--out", str(out))
+        assert self._outcomes(printed) == ["walked"]
+
+    def test_a_skip_says_unchanged(self, tmp_path, capsys):
+        out, cache = tmp_path / "walk.json", tmp_path / "etags.json"
+        with serve(_machine()) as url:
+            self._run(capsys, "capture", "--target", url, "--out", str(out),
+                      "--etag-cache", str(cache))
+            _, printed = self._run(capsys, "capture", "--target", url,
+                                   "--out", str(out), "--etag-cache", str(cache))
+        assert self._outcomes(printed) == ["unchanged"]
+
+    def test_exactly_one_line_is_printed_either_way(self, tmp_path, capsys):
+        """**One, not zero and not two.** A consumer that found none would have
+        to fall back to guessing, and one that found two could not say which
+        described this run."""
+        out, cache = tmp_path / "walk.json", tmp_path / "etags.json"
+        with serve(_machine()) as url:
+            _, first = self._run(capsys, "capture", "--target", url,
+                                 "--out", str(out), "--etag-cache", str(cache))
+            _, second = self._run(capsys, "capture", "--target", url,
+                                  "--out", str(out), "--etag-cache", str(cache))
+        assert len(self._outcomes(first)) == 1
+        assert len(self._outcomes(second)) == 1
+
+    def test_a_walk_without_the_cache_still_prints_it(self, tmp_path, capsys):
+        """The line is unconditional. A consumer must not have to know which
+        flags were passed before it knows whether to look."""
+        out = tmp_path / "walk.json"
+        with serve(_machine(etags=False)) as url:
+            _, printed = self._run(capsys, "capture", "--target", url,
+                                   "--out", str(out))
+        assert self._outcomes(printed) == ["walked"]
+
+    def test_every_value_printed_is_one_this_build_declares(self, tmp_path,
+                                                            capsys):
+        """A vocabulary nothing checks is a vocabulary that grows a member
+        somewhere else and never comes back to be declared."""
+        out, cache = tmp_path / "walk.json", tmp_path / "etags.json"
+        with serve(_machine()) as url:
+            _, first = self._run(capsys, "capture", "--target", url,
+                                 "--out", str(out), "--etag-cache", str(cache))
+            _, second = self._run(capsys, "capture", "--target", url,
+                                  "--out", str(out), "--etag-cache", str(cache))
+        for printed in (first, second):
+            assert set(self._outcomes(printed)) <= set(cli.OUTCOMES)
+
+    def test_the_prefix_cannot_be_confused_with_prose(self):
+        """It is upper case and starts the line, so nothing this command says in
+        a sentence can be mistaken for it."""
+        assert cli.OUTCOME.isupper() or cli.OUTCOME.split()[0].isupper()
+        assert cli.OUTCOME.endswith(" ")

@@ -178,6 +178,34 @@ There is deliberately no per-resource cache. Using a `304` means having kept the
 previous body, and a body cache on disk is exactly the fleet-inventory
 disclosure `capture` avoids by writing only the parsed form.
 
+### Reading `capture` from a script
+
+`capture` prints exactly one `OUTCOME ` line, always, and its value is one of
+`walked` or `unchanged`:
+
+```
+OUTCOME walked
+wrote 4 sensor(s) to walk.json
+```
+
+```
+sensor set unchanged since 2026-08-25T05:15:42Z -- all 2 collection(s) unchanged
+  walk.json left as it was; 2 request(s) instead of a full walk
+  this answers membership only: ...
+OUTCOME unchanged
+```
+
+**That line is the contract. Everything else `capture` prints is prose and may
+be reworded.**
+
+It exists because a skip and a walk both exit `0`, and they should: a skip is
+clean, and a fourth exit code would break the three-valued vocabulary
+(`0` clean / `1` findings / `2` could-not-complete) that every tool in this
+family shares. So the exit code cannot carry the distinction, and before this
+the only signal was a sentence — which a consumer had to match, and which
+nothing promised to keep. Reported from outside as issue #6, against a feature
+one release old.
+
 ### Credentials and TLS
 
 `--password` still works and now says what it costs: it crosses argv, where
