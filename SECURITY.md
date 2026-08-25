@@ -57,10 +57,16 @@ A single maintainer, no service-level commitment, and no bounty. You will get an
 acknowledgement and an honest answer about whether and when it will be fixed —
 including *not soon*, when that is true.
 
-**There is no supported release yet.** This project has no tagged version and is
-not on any package index, so there is no patched version to upgrade to. A fix
-lands on the default branch, and the report will say so plainly rather than imply
-a release process that does not exist.
+**The supported version is the latest release on PyPI**, and nothing older. This
+paragraph used to say the opposite -- *no tagged version, not on any package
+index, no patched version to upgrade to* -- which was true when it was written
+and false from the first release onwards. A security policy that tells a reporter
+there is nothing to upgrade to, while releases are shipping, is the worst place
+in the repository for a stale sentence.
+
+A fix lands on the default branch and ships in the next release; the reply to a
+report will say which. No version literal appears here on purpose -- a number in
+this file is a number that goes stale exactly the way the sentence above did.
 
 ## Scope
 
