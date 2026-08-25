@@ -25,6 +25,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from . import __version__
 from .inventory.declaration_source import (DeclarationSourceError,
                                            candidate_from_walk,
                                            load_declaration_source, merge_sources)
@@ -834,6 +835,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bmc-sensor-audit",
         description="Find the sensors that should be reporting and are not.")
+    # Consumers run this tool as a SUBPROCESS resolved on PATH, not as an
+    # import, so a `>=` in their packaging metadata governs what pip put in
+    # their environment and not what actually answers. Until this existed there
+    # was no way for them to find out: `--version` exited 2 with an argparse
+    # usage error, so a downstream floor could be declared and never checked.
+    parser.add_argument("--version", action="version",
+                        version=f"bmc-sensor-audit {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     declare = subparsers.add_parser(

@@ -340,3 +340,52 @@ class TestARefusalIsExitTwoNotATraceback:
             f"caught in main nor listed as caught locally. An uncaught refusal "
             f"exits 1, which means FINDINGS")
 
+
+
+class TestTheToolCanBeAskedWhatItIs:
+    """`--version`, and the reason it is not cosmetic.
+
+    Every consumer in this family runs this tool as a **subprocess resolved on
+    PATH**, never as an import. `fleet-sensor-baseline` declares
+    `bmc-sensor-audit>=0.1.5,<0.2`; pip enforces that over the environment it
+    installed into, and then the collector runs whatever `PATH` hands it. A
+    system-wide install, a pipx shim, or simply a different venv earlier on PATH
+    silently answers instead, and the floor is never consulted.
+
+    Until this flag existed there was no way to close that: `--version` exited 2
+    with an argparse usage error, so a downstream floor could be declared and
+    could not be checked. The flag is the surface that makes a runtime check
+    possible at all.
+    """
+
+    def _run(self, *args):
+        import os as _os
+        import subprocess as sp
+        import sys as _sys
+        from pathlib import Path as _Path
+        root = _Path(__file__).resolve().parents[1]
+        env = {**_os.environ, "PYTHONPATH": str(root / "src")}
+        return sp.run([_sys.executable, "-m", "bmc_sensor_audit.cli", *args],
+                      capture_output=True, text=True, env=env)
+
+    def test_it_exits_clean_and_names_the_distribution(self):
+        done = self._run("--version")
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.startswith("bmc-sensor-audit "), done.stdout
+
+    def test_it_reports_the_version_the_package_declares(self):
+        """Not a literal repeated here -- that would be the same number written
+        twice, and it would drift the first time one of them moved."""
+        from bmc_sensor_audit import __version__
+        assert self._run("--version").stdout.strip() == \
+            f"bmc-sensor-audit {__version__}"
+
+    def test_a_consumer_can_parse_a_floor_out_of_it(self):
+        """The shape a subprocess consumer actually needs: one line, on stdout,
+        with a dotted version it can compare. stderr and a usage dump are not
+        parseable, and that is what this used to emit."""
+        done = self._run("--version")
+        assert done.stderr == ""
+        name, _, version = done.stdout.strip().partition(" ")
+        assert name == "bmc-sensor-audit"
+        assert tuple(int(p) for p in version.split(".")[:3]) >= (0, 1, 5)
