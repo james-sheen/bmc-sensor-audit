@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -40,11 +41,39 @@ def _hooks_path() -> str | None:
     return result.stdout.strip() or None
 
 
+def _the_question_has_a_subject():
+    """Whether there is a clone here whose hooks COULD be enabled.
+
+    `core.hooksPath is None` has two causes that look identical from the
+    assertion and are opposites in meaning: a real clone where the hook was
+    never enabled -- which this file exists to shout about -- and a tree that is
+    not a clone at all, where there is nothing to enable and nothing was
+    checked.
+
+    The second is not hypothetical: the sdist ships `tests/`, so anyone who
+    unpacks it, and every distribution packager who builds from it, runs this in
+    a directory with no `.git` and often no `git`. They got a failure telling
+    them their hooks were misconfigured, about a repository they do not have.
+    """
+    if shutil.which("git") is None:
+        return False, "git is not on PATH"
+    inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"],
+                            cwd=str(ROOT), capture_output=True, text=True)
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return False, "this tree is not a git repository"
+    return True, ""
+
+
 class TestTheHookIsInstalled:
     @pytest.mark.skipif(os.environ.get("CI") == "true",
                         reason="hooks are meaningless on a CI runner; the workflow "
                                "runs the hygiene sweep directly instead")
     def test_core_hookspath_points_at_the_versioned_hooks(self):
+        askable, why = _the_question_has_a_subject()
+        if not askable:
+            pytest.skip(f"{why}, so no clone here could have hooks enabled and "
+                        f"nothing was checked -- which is a different answer "
+                        f"from the hook being off in a real checkout")
         configured = _hooks_path()
         assert configured == EXPECTED, (
             f"core.hooksPath is {configured!r}, expected {EXPECTED!r}.\n"

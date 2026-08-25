@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,32 @@ HOOK = ROOT / ".githooks" / "commit-msg"
 #: check below is against the real thing rather than a paraphrase of it.
 THE_LEAK = ("- The two checks are now byte-identical across all four. Repo #1 "  # hygiene: synthetic
             "tracks every\n  tree, so the check that they stay that way lives there.\n")
+
+
+def needs_git():
+    """Skip, in prose, when the question cannot be ASKED.
+
+    These tests build a throwaway repository and run the hook against it, so
+    they need the `git` BINARY -- not this checkout. Without it they used to
+    fail, and a failure is an answer: it says the guard is broken. The truth is
+    that nothing was checked.
+
+    That distinction has a consumer. The sdist ships `tests/`, so a distribution
+    packager or anyone unpacking it runs this suite in a build root with no git
+    at all and got seven reds that meant nothing. `test_no_git_is_cannot_tell_
+    and_exits_clean` deliberately does NOT go through here -- it is the one test
+    whose subject is the absence, and it has to keep running when git is gone.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git is not on PATH, so no repository could be built and "
+                    "the hook was never run; nothing here was checked")
+
+
+def run_hook(message_path):
+    """The hook shells out to git, so it needs the binary for the same reason."""
+    needs_git()
+    return subprocess.run(["sh", str(HOOK), str(message_path)],
+                          capture_output=True, text=True, cwd=str(ROOT))
 
 
 def hygiene():
@@ -175,8 +202,7 @@ class TestTheHookRunsWhatItSaysItRuns:
     def test_the_hook_refuses_the_message_that_shipped(self, tmp_path):
         path = tmp_path / "msg.txt"
         path.write_text(THE_LEAK)
-        result = subprocess.run(["sh", str(HOOK), str(path)],
-                                capture_output=True, text=True, cwd=str(ROOT))
+        result = run_hook(path)
         assert result.returncode != 0
         assert "repository_nickname" in result.stderr
 
@@ -185,8 +211,7 @@ class TestTheHookRunsWhatItSaysItRuns:
         and stop anyone committing."""
         path = tmp_path / "msg.txt"
         path.write_text("Anchor the release-tag rule on the version literal\n")
-        result = subprocess.run(["sh", str(HOOK), str(path)],
-                                capture_output=True, text=True, cwd=str(ROOT))
+        result = run_hook(path)
         assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -215,6 +240,7 @@ class TestTheStagedContentIsWhatShips:
 
     def _repo(self, tmp_path):
         import subprocess as sp
+        needs_git()
         sp.run(["git", "init", "-q", str(tmp_path)], check=True)
         for key, value in (("user.email", "t@example.com"), ("user.name", "t")):
             sp.run(["git", "-C", str(tmp_path), "config", key, value], check=True)

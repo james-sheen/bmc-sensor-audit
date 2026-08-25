@@ -305,8 +305,21 @@ class TestTheEndToEndDiffReproducesFromAClone:
     cannot drift underneath the test. If they move, the reader moved.
     """
 
-    @classmethod
+    # The decorator ORDER is load-bearing, and both orders look equally
+    # plausible. `@classmethod` on the OUTSIDE -- which is how this was written
+    # -- worked only because `classmethod` chained `__get__` to the descriptor
+    # beneath it, and CPython removed that chaining in 3.13. From 3.13 on, pytest
+    # could not see the fixture marker and both tests below ERRORed with
+    # `fixture 'report' not found`: the only two that run declaration against
+    # machine end to end, silently not running, while CI pinned a single 3.11
+    # and every host this is deployed on runs 3.14.
+    #
+    # Dropping `@classmethod` also passes, and is a trap: pytest deprecated
+    # class-scoped fixtures declared as instance methods and removes them in
+    # pytest 10. Only this order satisfies both -- measured on 3.10 and 3.14,
+    # against pytest 9.1.
     @pytest.fixture(scope="class")
+    @classmethod
     def report(cls):
         from bmc_sensor_audit.inventory.diff import compare
         from bmc_sensor_audit.inventory.redfish import walk_from_dict

@@ -21,6 +21,40 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Every version `requires-python` admits, not just the one this machine had.
+  #
+  # `checks` below runs the hygiene, commit-message and packaging steps once, on
+  # one interpreter, because those ask questions that do not vary by version.
+  # This job asks the one that does. It exists because `>=3.10` is a claim about
+  # five interpreters and exactly one of them was ever run: two end-to-end tests
+  # -- the only pair that runs declaration against machine -- had been ERRORing
+  # on 3.13 and 3.14 since CPython dropped classmethod descriptor chaining, and
+  # a single-version matrix cannot see that by construction. Both hosts this is
+  # deployed on run 3.14.
+  versions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Tests
+        # Same invocation as the `checks` job: the package is deliberately NOT
+        # installed, so the test asserting a bare module path FAILS without
+        # PYTHONPATH stays a real negative.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml pytest
+          python3 -m pytest tests/ -q
+
   checks:
     runs-on: ubuntu-latest
     steps:
