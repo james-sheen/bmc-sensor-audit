@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from bmc_sensor_audit.inventory.redfish import (  # noqa: E402
     WALK_FORMAT, RedfishClient, walk_chassis, walk_from_dict)
 from bmc_sensor_audit.inventory.regression import (  # noqa: E402
-    REGRESSION_KINDS, compare_walks, parse_prefix_map)
+    REGRESSION_KINDS, _apply_prefix, compare_walks, parse_prefix_map)
 from bmc_sensor_audit.testing.mock_redfish import MockBMC, serve  # noqa: E402
 
 HOST = (("INLET_TEMP", 24.0), ("FAN0", 4200.0))
@@ -228,13 +228,53 @@ class TestTheMapIsParsedStrictly:
     def test_an_empty_new_prefix_means_the_prefix_was_dropped(self):
         assert parse_prefix_map(["HMC_0_="]) == [("HMC_0_", "")]
 
-    @pytest.mark.parametrize("entry", ["nonsense", "=NEW", ""])
+    @pytest.mark.parametrize("entry", ["nonsense", "", "="])
     def test_a_malformed_entry_raises_rather_than_being_skipped(self, entry):
         """A typo that silently declared nothing would produce the full
         mass-removal report the flag was passed to prevent, with no sign that the
-        flag had not been understood."""
+        flag had not been understood.
+
+        `=` on its own is here because it is the one that LOOKS like the two
+        legal forms: it declares neither an old prefix nor a new one, and would
+        match every name while renaming nothing.
+        """
         with pytest.raises(ValueError, match="aggregation-prefix"):
             parse_prefix_map([entry])
+
+    def test_an_empty_old_prefix_means_a_prefix_was_ADDED(self):
+        """**This used to be refused, and the refusal was the defect.**
+
+        `HMC_0_=` says the prefix was dropped and was always accepted. `=HMC_0_`
+        says it was added -- which is the COMMON direction, because it is what
+        happens when a satellite BMC comes online behind an aggregator and every
+        sensor name gains a prefix. A downstream consumer had to declare that
+        stem by stem, once per distinct sensor name root, instead of once.
+
+        Reported from outside as issue #5.
+        """
+        assert parse_prefix_map(["=HMC_0_"]) == [("", "HMC_0_")]
+
+    def test_an_added_prefix_pairs_a_whole_walk_in_one_entry(self):
+        """The end-to-end half. Parsing it is not the point; pairing is."""
+        report = compare_walks(_walk(""), _walk("HMC_0_"),
+                               prefix_map=[("", "HMC_0_")])
+        assert report.prefix_paired == 4
+        assert not [c for c in report.changes if c.kind in REGRESSION_KINDS]
+
+    def test_an_added_prefix_still_does_not_hide_a_real_disappearance(self):
+        """The guard on the guard. If declaring a rename could absorb a sensor
+        that genuinely vanished, the declaration would be a way to make findings
+        disappear -- and an empty OLD matches every name, so this is the entry
+        with the most reach of any."""
+        report = compare_walks(_walk(""), _walk("HMC_0_", drop="TEMP1"),
+                               prefix_map=[("", "HMC_0_")])
+        removed = [c for c in report.changes if c.kind == "sensor_removed"]
+        assert len(removed) == 1, [c.kind for c in report.changes]
+
+    def test_a_specific_prefix_still_beats_the_catch_all(self):
+        """An empty OLD matches everything, so longest-first is what stops it
+        swallowing a more precise entry declared beside it."""
+        assert _apply_prefix("Fan_1", [("", "X_"), ("Fan_", "GPU_")]) == "GPU_1"
 
     def test_the_longest_prefix_wins(self):
         """Given two entries where one is a prefix of the other, a shortest-first

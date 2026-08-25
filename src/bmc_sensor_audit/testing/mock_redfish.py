@@ -19,6 +19,7 @@ same SKU, which is exactly the population this tool is aimed at.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import threading
 from dataclasses import dataclass, field
@@ -99,6 +100,10 @@ class MockBMC:
     sensors: list[MockSensor] = field(default_factory=list)
     shape: str = "sensors"                       # "sensors" | "legacy" | "both"
     fail: dict[str, int] = field(default_factory=dict)
+    #: Serve ETags and honour `If-None-Match`. Off by default: a BMC that does
+    #: not do ETags is the common case, and it is the one a caller can get
+    #: wrong by reading *no answer* as *unchanged*.
+    etags: bool = False
 
     def add(self, name: str, **kwargs: Any) -> MockSensor:
         sensor = MockSensor(name=name, **kwargs)
@@ -161,6 +166,11 @@ class MockBMC:
 class _Handler(BaseHTTPRequestHandler):
     routes: dict[str, dict[str, Any]] = {}
     failures: dict[str, int] = {}
+    #: Whether this machine implements ETags at all. Off by default, because
+    #: plenty of real BMCs do not, and a mock that always did would make the
+    #: *cannot tell* path untestable -- which is the path the caller most needs
+    #: to get right.
+    etags: bool = False
 
     def do_GET(self) -> None:  # noqa: N802 -- the base class names it
         path = self.path.split("?", 1)[0].rstrip("/") or "/redfish/v1"
@@ -173,9 +183,22 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404, "no such resource")
             return
         body = json.dumps(payload).encode()
+        tag = None
+        if self.etags:
+            # Derived from the bytes, the way a real implementation derives it
+            # from the representation: serve different content, get a different
+            # ETag, with nothing to keep in sync by hand.
+            tag = '"' + hashlib.sha256(body).hexdigest()[:16] + '"'
+            if self.headers.get("If-None-Match") == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.end_headers()
+                return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if tag:
+            self.send_header("ETag", tag)
         self.end_headers()
         self.wfile.write(body)
 
@@ -192,7 +215,8 @@ def serve(bmc: MockBMC, *, host: str = "127.0.0.1") -> Iterator[str]:
     not collide on a hardcoded port.
     """
     handler = type("_Bound", (_Handler,),
-                   {"routes": bmc.routes(), "failures": dict(bmc.fail)})
+                   {"routes": bmc.routes(), "failures": dict(bmc.fail),
+                    "etags": bool(getattr(bmc, "etags", False))})
     server = ThreadingHTTPServer((host, 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

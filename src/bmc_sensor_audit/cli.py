@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime
@@ -30,6 +31,7 @@ from .inventory.declaration_source import (DeclarationSourceError,
 from .inventory.diff import compare
 from .inventory.entity_manager import load_declaration
 from .inventory.redfish import (RedfishClient, Walk, order_walks, validate_walk,
+                                etag_cache, membership_unchanged,
                                 walk_chassis, walk_digest, walk_from_dict)
 from .inventory.regression import compare_walks, parse_prefix_map
 from .report import (as_json, as_text, regression_as_json, regression_as_text,
@@ -68,14 +70,110 @@ def _walk_span(walks: list[Walk]) -> str | None:
     return f"{last - first} ({stamps[0]} to {stamps[-1]})"
 
 
+class CredentialError(Exception):
+    """A credential this run was told to use and could not read.
+
+    Caught in `main` rather than in each subcommand: the three that can reach a
+    BMC fail this way identically, and a per-subcommand catch is three chances
+    to forget one. **It is exit 2, not exit 1** -- a run that could not obtain a
+    password did not audit a machine and find nothing.
+    """
+
+
+def _add_connection_flags(sub: argparse.ArgumentParser) -> None:
+    """The flags every subcommand that can reach a BMC accepts.
+
+    **One declaration, three subcommands.** These were three copies, which is how
+    `--password-env` would have landed on `capture` and not on `coverage` -- and
+    the operator who found the gap on one would have no reason to re-check the
+    others.
+    """
+    sub.add_argument("--username")
+    credential = sub.add_mutually_exclusive_group()
+    credential.add_argument("--password",
+                            help="DISCOURAGED: this crosses argv, where ps can "
+                                 "read it on a shared host. Prefer --password-env")
+    credential.add_argument("--password-env", metavar="NAME",
+                            help="read the password from this environment "
+                                 "variable, so the value never enters argv")
+    credential.add_argument("--password-file", metavar="PATH",
+                            help="read the password from the first line of this "
+                                 "file, so the value never enters argv")
+    sub.add_argument("--insecure", action="store_true",
+                     help="do not verify TLS; BMCs ship self-signed certificates")
+    sub.add_argument("--cafile", metavar="PATH",
+                     help="verify the BMC against this certificate or CA bundle "
+                          "instead of the system trust store")
+    sub.add_argument("--pin-sha256", metavar="FINGERPRINT",
+                     help="require the BMC to present exactly this certificate, "
+                          "by SHA-256 of its DER. Replaces chain verification, "
+                          "which a self-signed certificate cannot satisfy")
+    sub.add_argument("--timeout", type=float, default=15.0)
+
+
+def _resolve_password(args: argparse.Namespace) -> str | None:
+    """The password, from whichever surface was named.
+
+    **Read at the moment of use, and never echoed.** A missing environment
+    variable or an unreadable file is a run that could not happen -- reported,
+    not silently treated as *no password*, which would reach the BMC as an
+    anonymous request and fail with a misleading 401.
+    """
+    if getattr(args, "password_env", None):
+        value = os.environ.get(args.password_env)
+        if value is None:
+            raise CredentialError(f"--password-env names {args.password_env!r} and that "
+                           f"variable is not set")
+        return value
+    if getattr(args, "password_file", None):
+        try:
+            first = Path(args.password_file).read_text(encoding="utf-8").split("\n", 1)[0]
+        except OSError as exc:
+            raise CredentialError(f"--password-file {args.password_file}: "
+                           f"{exc.strerror or exc}") from exc
+        # A trailing newline is what every editor adds and no BMC expects.
+        return first.rstrip("\r")
+    return getattr(args, "password", None)
+
+
 def _client(args: argparse.Namespace) -> RedfishClient:
-    return RedfishClient(args.target, username=args.username, password=args.password,
-                         verify_tls=not args.insecure, timeout=args.timeout)
+    return RedfishClient(args.target, username=args.username,
+                         password=_resolve_password(args),
+                         verify_tls=not args.insecure, timeout=args.timeout,
+                         cafile=getattr(args, "cafile", None),
+                         pin_sha256=getattr(args, "pin_sha256", None))
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
     """Record a walk to disk, for diffing later or for a before/after gate."""
-    walk = walk_chassis(_client(args))
+    client = _client(args)
+
+    cache_path = Path(args.etag_cache) if args.etag_cache else None
+    if cache_path is not None and cache_path.is_file():
+        try:
+            cache = json.loads(cache_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            # Reported, and then the walk happens anyway. An unreadable cache is
+            # a reason to do the full work, never a reason to skip it.
+            print(f"  etag cache unusable ({error}); walking in full")
+            cache = None
+        if cache is not None:
+            verdict, why = membership_unchanged(client, cache)
+            if verdict is True:
+                print(f"sensor set unchanged since {cache.get('captured_at')} "
+                      f"-- {why}")
+                print(f"  {args.out} left as it was; {len(cache.get('collections') or {})} "
+                      f"request(s) instead of a full walk")
+                # **Says what it did NOT check.** Collection ETags answer
+                # membership. A threshold edited on a sensor that stayed present
+                # moves that sensor's resource and not its collection.
+                print("  this answers membership only: a threshold or unit "
+                      "changed on a sensor that stayed present would not show "
+                      "here. Drop --etag-cache to compare configuration")
+                return EXIT_CLEAN
+            print(f"  {why}; walking in full")
+
+    walk = walk_chassis(client)
     text = json.dumps(walk.to_dict(), indent=2)
     Path(args.out).write_text(text)
     print(f"wrote {len(walk)} sensor(s) to {args.out}")
@@ -85,6 +183,14 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         # own side of the identity line; this tool prints which capture and never
         # learns which machine.
         print(f"  digest      {walk_digest(text)}")
+    if cache_path is not None:
+        fresh = etag_cache(client)
+        cache_path.write_text(json.dumps(fresh, indent=2) + "\n")
+        found = len(fresh["collections"])
+        print(f"  etag cache  {found} collection(s) -> {cache_path}"
+              if found else
+              f"  etag cache  this BMC returned no ETags; {cache_path} cannot "
+              f"shorten the next walk")
     print(f"  chassis     {len(walk.chassis)}")
     print(f"  tree shapes {sorted(walk.shapes_seen) or '(none found)'}")
     if walk.latencies:
@@ -746,11 +852,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = coverage.add_mutually_exclusive_group(required=True)
     source.add_argument("--target", help="Redfish base URL, e.g. https://bmc.example")
     source.add_argument("--walk", help="a recorded walk, instead of live hardware")
-    coverage.add_argument("--username")
-    coverage.add_argument("--password")
-    coverage.add_argument("--insecure", action="store_true",
-                          help="do not verify TLS; BMCs ship self-signed certificates")
-    coverage.add_argument("--timeout", type=float, default=15.0)
+    _add_connection_flags(coverage)
     coverage.add_argument("--json", action="store_true", help="machine-readable output")
     coverage.add_argument("--include-disabled", action="store_true",
                           help="also expect sensors the config marks Status: disabled")
@@ -790,11 +892,7 @@ def build_parser() -> argparse.ArgumentParser:
     detect_source.add_argument("--walk", action="append",
                                help="a recorded walk; repeatable, OLDEST FIRST -- "
                                     "stuck-at needs history and one walk is one sample")
-    detect.add_argument("--username")
-    detect.add_argument("--password")
-    detect.add_argument("--insecure", action="store_true",
-                        help="do not verify TLS; BMCs ship self-signed certificates")
-    detect.add_argument("--timeout", type=float, default=15.0)
+    _add_connection_flags(detect)
     detect.add_argument("--include-disabled", action="store_true")
     detect.add_argument("--strict-declines", action="store_true",
                         help="fail on data-sufficiency and unrecognised declines too")
@@ -838,15 +936,16 @@ def build_parser() -> argparse.ArgumentParser:
         "capture", help="record a walk to disk, for a before/after gate")
     capture.add_argument("--target", required=True)
     capture.add_argument("--out", required=True, help="file to write")
+    capture.add_argument("--etag-cache", metavar="PATH",
+                         help="record collection ETags here, and on the next run "
+                              "ask the BMC whether the sensor SET changed before "
+                              "walking it. Membership only: a threshold edited on "
+                              "a sensor that stayed present will not show")
     capture.add_argument("--print-digest", action="store_true",
                          help="also print a SHA-256 content handle for the file, so "
                               "a collector can bind it to a unit on its own side of "
                               "the identity line")
-    capture.add_argument("--username")
-    capture.add_argument("--password")
-    capture.add_argument("--insecure", action="store_true",
-                         help="do not verify TLS; BMCs ship self-signed certificates")
-    capture.add_argument("--timeout", type=float, default=15.0)
+    _add_connection_flags(capture)
     capture.set_defaults(func=_cmd_capture)
 
     return parser
@@ -854,7 +953,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except CredentialError as error:
+        print(f"{error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
 
 
 if __name__ == "__main__":

@@ -54,6 +54,8 @@ belongs in this paragraph.
 | Redfish walk | working — both tree shapes, standard library only |
 | Coverage diff | working — three-way classification, thresholds, reverse direction |
 | Walk capture | working — `capture` writes a walk for a before/after gate, and `--print-digest` prints a content handle for it |
+| Reaching a BMC | `--password-env` / `--password-file` keep a credential out of argv; `--cafile` and `--pin-sha256` verify one, where `--insecure` was the only control |
+| Repeat captures | `capture --etag-cache` asks whether the sensor SET changed before walking. Membership only — see below |
 | Walk validation | working — `validate-walk` checks a capture against the format it declares, with no engine and no hardware; `walk/1` has a stability statement a downstream pin can pin to |
 | Declaration sources | working — `pdr/1` and `fleet-baseline/1` via `--declaration`, layered under the manufacturer's files. A candidate refuses to be consumed until somebody reviews it |
 | Firmware regression gate | working — `regression` diffs two captures: removed, renamed, re-thresholded, and pairs across a **declared** aggregation-prefix change |
@@ -61,7 +63,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 606 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 658 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison (Stage 3) | not started |
@@ -140,6 +142,40 @@ A recorded walk is checkable the same way, and by the person who receives one:
 ```
 PYTHONPATH=src python3 -m bmc_sensor_audit.cli validate-walk before.json --print-digest
 ```
+
+### Repeat captures, and what a short one does not tell you
+
+```
+bmc-sensor-audit capture --target https://<bmc> --out walk.json --etag-cache etags.json
+```
+
+The first run walks in full and records the ETag of every Redfish *collection*.
+The next run asks the BMC whether those collections changed — a handful of
+requests instead of a full walk — and skips the walk when they have not.
+
+**It answers membership, and it says so.** A collection's representation is its
+member list, so its ETag moves when a sensor appears or disappears. A threshold
+edited on a sensor that stayed present changes that sensor's resource and not
+its collection, and the skip line tells you that rather than leaving you to
+infer it. Drop the flag to compare configuration.
+
+A BMC that does not implement ETags gets a full walk every time and is told so.
+*Cannot tell* is never treated as *unchanged*.
+
+There is deliberately no per-resource cache. Using a `304` means having kept the
+previous body, and a body cache on disk is exactly the fleet-inventory
+disclosure `capture` avoids by writing only the parsed form.
+
+### Credentials and TLS
+
+`--password` still works and now says what it costs: it crosses argv, where
+`ps` can read it. `--password-env NAME` and `--password-file PATH` do not.
+
+`--cafile PATH` verifies the BMC against a certificate you supply, with hostname
+checking left on. `--pin-sha256 FINGERPRINT` requires one exact certificate and
+**replaces** chain verification, which is the only thing that works for the
+self-signed certificate a BMC ships. Both are alternatives to `--insecure`,
+which remains what it was.
 
 `capture --print-digest` prints the same handle when the file is written — the
 SHA-256 of the bytes, which `sha256sum` reproduces. A fleet collector binds

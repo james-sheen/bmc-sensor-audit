@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
+import http.client
 import json
 import ssl
 import time
@@ -36,6 +38,8 @@ from . import redfish_schema
 
 __all__ = ["LiveSensor", "Walk", "RedfishClient", "walk_chassis", "read_sensor_object",
            "walk_from_dict", "order_walks", "validate_walk", "walk_digest",
+           "etag_cache", "membership_unchanged", "ETAG_CACHE_FORMAT",
+           "CertificatePinError",
            "WALK_FORMAT", "LEGACY_RESOURCES"]
 
 WALK_FORMAT = "bmc-sensor-audit/walk/1"
@@ -191,24 +195,93 @@ class Walk:
         }
 
 
+class CertificatePinError(Exception):
+    """The BMC presented a certificate that is not the pinned one."""
+
+
+def _fingerprint(der: bytes) -> str:
+    return hashlib.sha256(der).hexdigest()
+
+
+def _pinned_opener(pin: str) -> urllib.request.OpenerDirector:
+    """An opener that refuses any certificate but the one named.
+
+    The comparison is constant-time and case-insensitive, and it accepts the
+    colon-separated spelling that `openssl x509 -fingerprint` prints, because
+    that is where an operator copies the value from and re-typing it by hand is
+    how a pin ends up subtly wrong.
+    """
+    expected = pin.replace(":", "").strip().lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise CertificatePinError(
+            f"a SHA-256 pin is 64 hex characters; got {len(expected)}. "
+            f"`openssl x509 -in cert.pem -noout -fingerprint -sha256` prints one")
+
+    context = ssl.create_default_context()
+    # Off because the pin is the verification. Leaving them on would refuse every
+    # self-signed BMC certificate before the fingerprint was ever compared, which
+    # is the whole population this flag exists for.
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+
+    class _PinnedConnection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            super().connect()
+            der = self.sock.getpeercert(binary_form=True)
+            got = _fingerprint(der) if der else ""
+            if not hmac.compare_digest(got, expected):
+                self.close()
+                raise CertificatePinError(
+                    f"the BMC presented sha256:{got or '(no certificate)'} and "
+                    f"the pin is sha256:{expected}")
+
+    class _PinnedHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):  # noqa: ANN001,ANN201 - urllib's signature
+            return self.do_open(_PinnedConnection, req, context=context)
+
+    return urllib.request.build_opener(_PinnedHandler)
+
+
 class RedfishClient:
     """Minimal Redfish reader. GET and JSON, nothing else."""
 
     def __init__(self, base_url: str, *, username: str | None = None,
                  password: str | None = None, verify_tls: bool = True,
-                 timeout: float = 15.0) -> None:
+                 timeout: float = 15.0, cafile: str | None = None,
+                 pin_sha256: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         # (path, seconds) per fetch, in walk order. On the client rather than
         # threaded through every walk function: the walker calls `get` from six
         # places and a parameter would have to reach all of them.
         self.latencies: list[tuple[str, float]] = []
+        #: `{path: etag}` for every resource that answered with one, and the
+        #: subset of those paths whose payload carried a `Members` list. Only
+        #: the second set is worth probing later: a COLLECTION's representation
+        #: changes when its membership does, which is the question this tool
+        #: asks. See `membership_unchanged`.
+        self.observed_etags: dict[str, str] = {}
+        self.collections: set[str] = set()
         self._auth: str | None = None
         if username is not None:
             raw = f"{username}:{password or ''}".encode()
             self._auth = "Basic " + base64.b64encode(raw).decode()
         self._ctx: ssl.SSLContext | None = None
-        if not verify_tls:
+        self._opener: urllib.request.OpenerDirector | None = None
+        if pin_sha256 is not None:
+            # **Pinning REPLACES chain verification, it does not add to it.** A
+            # BMC's certificate is self-signed and chains to nothing, so there is
+            # no path to validate; what can be checked is that the certificate is
+            # the exact one the operator recorded. Verifying the fingerprint on
+            # every connection is stronger than a trust store for this case and
+            # weaker for every other, which is why it is a separate flag.
+            self._opener = _pinned_opener(pin_sha256)
+        elif cafile is not None:
+            # Hostname checking stays ON. A BMC reached by IP whose certificate
+            # names a hostname will fail here, and that failure is correct --
+            # `--pin-sha256` is the flag for that case, not a quieter `--cafile`.
+            self._ctx = ssl.create_default_context(cafile=cafile)
+        elif not verify_tls:
             # BMCs ship self-signed certificates as a rule. Opt-in, never default:
             # the flag has to be typed, so nobody disables verification by accident.
             self._ctx = ssl.create_default_context()
@@ -228,16 +301,57 @@ class RedfishClient:
         # `perf_counter` rather than wall time: this is an interval, and a wall
         # clock that steps during a walk would record a negative one.
         started = time.perf_counter()
-        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ctx) as response:
+        opened = (self._opener.open(request, timeout=self.timeout)
+                  if self._opener is not None
+                  else urllib.request.urlopen(request, timeout=self.timeout,
+                                              context=self._ctx))
+        with opened as response:
             body = response.read()
+            response_headers = response.headers
         # Measured around the read as well as the request. A Redfish collection
         # arrives in one body, and timing only the connection would report a slow
         # BMC as fast.
         self.latencies.append((path, time.perf_counter() - started))
+        etag = response_headers.get("ETag")
+        if etag:
+            self.observed_etags[path] = etag
         parsed = json.loads(body)
         if not isinstance(parsed, dict):
             raise ValueError(f"{url} returned {type(parsed).__name__}, not an object")
+        if isinstance(parsed.get("Members"), list):
+            self.collections.add(path)
         return parsed
+
+    def probe_unchanged(self, path: str, etag: str) -> bool | None:
+        """Conditional GET. True unchanged, False changed, None cannot tell.
+
+        **The returned ETag is compared, not just the status.** A BMC that
+        ignores `If-None-Match` answers 200 and hands back the same ETag it gave
+        last time -- reading that as *changed* would make the whole mechanism
+        useless on exactly the firmware it was meant to help. A 200 with no ETag
+        at all is *cannot tell*, which is neither.
+        """
+        url = path if path.startswith("http") else f"{self.base_url}{path}"
+        request = urllib.request.Request(
+            url, headers={"Accept": "application/json", "If-None-Match": etag})
+        if self._auth:
+            request.add_header("Authorization", self._auth)
+        try:
+            opened = (self._opener.open(request, timeout=self.timeout)
+                      if self._opener is not None
+                      else urllib.request.urlopen(request, timeout=self.timeout,
+                                                  context=self._ctx))
+            with opened as response:
+                response.read()
+                fresh = response.headers.get("ETag")
+        except urllib.error.HTTPError as error:
+            if error.code == 304:
+                return True
+            raise
+        if not fresh:
+            return None
+        self.observed_etags[path] = fresh
+        return fresh == etag
 
 
 def _members(payload: dict[str, Any]) -> list[str]:
@@ -670,6 +784,71 @@ def _threshold_problems(item: dict, where: str) -> list[str]:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             problems.append(f"{where} threshold {slot!r} is not a number")
     return problems
+
+
+ETAG_CACHE_FORMAT = "bmc-sensor-audit/etag-cache/1"
+
+
+def etag_cache(client: "RedfishClient") -> dict[str, Any]:
+    """What to probe on the next visit, recorded from the walk just done.
+
+    **Collections only, and that is the whole design.** A per-resource ETag
+    cache would let a walk skip transferring an unchanged sensor -- and to use a
+    `304` it would have to have kept the previous BODY, which means a cache of
+    raw Redfish payloads on disk. Those carry serial numbers, asset tags and MAC
+    addresses; *the parse is the redaction* exists precisely so this tool never
+    writes one. So the cache holds ETags and nothing else, and the only question
+    ETags alone can answer is about the resources whose representation IS a list
+    of members.
+    """
+    return {
+        "format": ETAG_CACHE_FORMAT,
+        "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "collections": {path: client.observed_etags[path]
+                        for path in sorted(client.collections)
+                        if path in client.observed_etags},
+    }
+
+
+def membership_unchanged(client: "RedfishClient",
+                         cache: dict[str, Any]) -> tuple[bool | None, str]:
+    """`(verdict, sentence)` -- is the sensor SET the same as when cached?
+
+    **This is a narrower question than *has anything changed*, and the caller
+    must not widen it.** A Redfish collection's representation is its member
+    list, so its ETag moves when a sensor appears or disappears. A threshold
+    edited on a sensor that stayed present changes the SENSOR resource and not
+    the collection, so this answers `True` while a configuration audit would
+    have findings.
+
+    Presence is what the collector upstream of this needed, so presence is what
+    is offered, under a name that says so.
+
+    `None` means the BMC does not do ETags, or stopped. That is not `True`.
+    """
+    collections = cache.get("collections") or {}
+    if not collections:
+        return None, "the cache records no collection ETags, so there is nothing to compare"
+
+    unknown = 0
+    for path, etag in sorted(collections.items()):
+        try:
+            verdict = client.probe_unchanged(path, etag)
+        except urllib.error.HTTPError as error:
+            return None, f"{path} answered {error.code}; the tree may have moved"
+        except OSError as error:
+            return None, f"{path} could not be reached: {error}"
+        if verdict is False:
+            return False, f"{path} changed"
+        if verdict is None:
+            unknown += 1
+    if unknown:
+        # Partial support is not support. Answering `unchanged` because the
+        # collections that DO carry ETags agreed would be a guess about the ones
+        # that do not, made on the machine where it is least checkable.
+        return None, (f"{unknown} of {len(collections)} collection(s) returned no "
+                      f"ETag, so this BMC cannot answer the question")
+    return True, f"all {len(collections)} collection(s) unchanged"
 
 
 def walk_digest(raw: bytes | str) -> str:

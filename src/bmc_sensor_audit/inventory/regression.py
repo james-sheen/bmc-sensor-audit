@@ -131,11 +131,20 @@ def parse_prefix_map(entries: Sequence[str]) -> list[tuple[str, str]]:
     parsed: list[tuple[str, str]] = []
     for entry in entries:
         old, sep, new = entry.partition("=")
-        if not sep or not old:
+        if not sep:
             raise ValueError(
                 f"--aggregation-prefix {entry!r} is not OLD=NEW. The old prefix is "
                 f"the one in the earlier walk; an empty new prefix is allowed and "
-                f"means the prefix was dropped")
+                f"means the prefix was dropped, and an empty OLD is allowed and "
+                f"means a prefix was added to every name")
+        if not old and not new:
+            # `=` on its own declares nothing and would match every name, so it
+            # reads as a typo for one of the two useful forms rather than as an
+            # instruction. Refusing it costs nothing; accepting it would make a
+            # mistyped flag look like a flag that worked.
+            raise ValueError(
+                f"--aggregation-prefix {entry!r} has neither an old nor a new "
+                f"prefix, so it declares no rename at all")
         parsed.append((old, new))
     return parsed
 
