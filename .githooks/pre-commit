@@ -14,6 +14,13 @@
 set -e
 ROOT="$(git rev-parse --show-toplevel)"
 
+# FIRST, because it decides whether anything below it can speak for this commit.
+# Every other check here reads the WORKING TREE; the commit records the INDEX.
+# When they differ, a green hook is green about files that are not being
+# committed -- which is how this repository shipped a README test count that was
+# six short, twice in one day, with this hook passing both times.
+python3 "$ROOT/tools/hygiene_check.py" --staged-is-what-ships
+
 python3 "$ROOT/tools/hygiene_check.py"
 
 # The README's test count, checked where the drift is created rather than where it

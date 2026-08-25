@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -251,6 +252,42 @@ def scan_text(text: str, label: str, rules: list[Rule]) -> list[tuple[Path, int,
     return hits
 
 
+#: Set this to commit deliberately with a file both staged and further edited --
+#: `git add -p` and friends. Named rather than `--no-verify`, which would also
+#: switch off the publication rules, and those are the ones that matter most.
+PARTIAL_STAGE_ESCAPE = "HYGIENE_ALLOW_PARTIAL_STAGE"
+
+
+def staged_and_dirty(root: Path) -> list[str] | None:
+    """Files that are staged AND further modified, or None if git cannot say.
+
+    **Every other check in the pre-commit hook reads the WORKING TREE, and the
+    commit records the INDEX.** When those differ, the hook is reporting on
+    files that are not the ones being committed -- and reporting a pass.
+
+    That is not hypothetical. `bmc-sensor-audit` shipped a README whose test
+    count was six short, twice in one day, and the second reached a public push.
+    The hook's own count check ran and PASSED both times: it compared the
+    working-tree README against pytest and they agreed. The stale number was
+    already in the index.
+
+    Partial staging is legitimate, so this refuses rather than judges: it says
+    the checks below it cannot speak for this commit, and names the escape.
+    """
+    try:
+        staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                                cwd=str(root), capture_output=True, text=True)
+        dirty = subprocess.run(["git", "diff", "--name-only"],
+                               cwd=str(root), capture_output=True, text=True)
+    except OSError:
+        # No git binary. *Cannot tell* is not *nothing to report*.
+        return None
+    if staged.returncode != 0 or dirty.returncode != 0:
+        return None
+    both = set(staged.stdout.split()) & set(dirty.stdout.split())
+    return sorted(both)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--all", action="store_true",
@@ -259,10 +296,42 @@ def main(argv: list[str] | None = None) -> int:
                         help="scan a commit message instead of files; a message "
                              "is a published surface and cannot be corrected "
                              "once pushed")
+    parser.add_argument("--staged-is-what-ships", action="store_true",
+                        help="refuse when a staged file has further unstaged "
+                             "edits, because every other check here reads the "
+                             "working tree while the commit records the index")
     parser.add_argument("--root", default=".")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
+
+    if args.staged_is_what_ships:
+        if os.environ.get(PARTIAL_STAGE_ESCAPE):
+            print(f"hygiene: {PARTIAL_STAGE_ESCAPE} is set; committing part of a "
+                  f"file deliberately")
+            return EXIT_CLEAN
+        both = staged_and_dirty(root)
+        if both is None:
+            # Prose, and a clean exit. A check that could not run says so.
+            print("hygiene: git cannot say what is staged here, so whether the "
+                  "index matches the working tree was NOT checked")
+            return EXIT_CLEAN
+        if not both:
+            print("hygiene: the index and the working tree agree on every "
+                  "staged file")
+            return EXIT_CLEAN
+        print(f"hygiene: {len(both)} staged file(s) have further unstaged edits "
+              f"-- commit refused\n", file=sys.stderr)
+        for name in both:
+            print(f"  {name}", file=sys.stderr)
+        print(f"\n  The commit would record what you staged, not what you see."
+              f"\n  Every other check in this hook reads the working tree, so a"
+              f"\n  green hook says nothing about this commit."
+              f"\n"
+              f"\n  git add <path>            to commit what you have now"
+              f"\n  {PARTIAL_STAGE_ESCAPE}=1   to commit part of a file on purpose",
+              file=sys.stderr)
+        return EXIT_FOUND
 
     if args.message:
         local = load_local_rules(root)

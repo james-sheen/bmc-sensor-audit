@@ -192,3 +192,121 @@ class TestTheHookRunsWhatItSaysItRuns:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestTheStagedContentIsWhatShips:
+    """The guard for the mistake this repository made twice in one day.
+
+    **Every other check in the pre-commit hook reads the WORKING TREE. The
+    commit records the INDEX.** When they differ, the hook reports on files that
+    are not being committed -- and reports a pass.
+
+    That is exactly what happened: a README test count was staged, six tests were
+    then added, and the commit shipped the stale number. `TestTheReadmeTestCount`
+    ran in the hook both times and PASSED both times, because it compared the
+    working-tree README against pytest and they agreed. The second one reached a
+    public push.
+
+    Partial staging with `git add -p` is legitimate, so this refuses and names an
+    escape rather than judging intent -- and the escape is an environment
+    variable rather than `--no-verify`, which would also switch off the
+    publication rules.
+    """
+
+    def _repo(self, tmp_path):
+        import subprocess as sp
+        sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for key, value in (("user.email", "t@example.com"), ("user.name", "t")):
+            sp.run(["git", "-C", str(tmp_path), "config", key, value], check=True)
+        (tmp_path / "a.txt").write_text("one\n")
+        sp.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True)
+        sp.run(["git", "-C", str(tmp_path), "commit", "-qm", "first"], check=True)
+        return tmp_path
+
+    def _check(self, root, env=None):
+        import os as _os
+        merged = dict(_os.environ)
+        merged.pop("HYGIENE_ALLOW_PARTIAL_STAGE", None)
+        merged.update(env or {})
+        return subprocess.run(
+            [sys.executable, str(TOOL), "--staged-is-what-ships",
+             "--root", str(root)],
+            capture_output=True, text=True, env=merged)
+
+    def test_a_clean_index_passes(self, tmp_path):
+        root = self._repo(tmp_path)
+        (root / "a.txt").write_text("two\n")
+        subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True)
+        result = self._check(root)
+        assert result.returncode == 0, result.stderr
+        assert "agree on every staged file" in result.stdout
+
+    def test_a_staged_file_edited_afterwards_is_refused(self, tmp_path):
+        """The defect, reproduced."""
+        root = self._repo(tmp_path)
+        (root / "a.txt").write_text("two\n")
+        subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True)
+        (root / "a.txt").write_text("three\n")
+        result = self._check(root)
+        assert result.returncode == 1
+        assert "a.txt" in result.stderr
+        assert "not what you see" in result.stderr
+
+    def test_the_refusal_names_both_ways_out(self, tmp_path):
+        """A refusal nobody can satisfy is a refusal people route around with
+        --no-verify, which switches off the publication rules too."""
+        root = self._repo(tmp_path)
+        (root / "a.txt").write_text("two\n")
+        subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True)
+        (root / "a.txt").write_text("three\n")
+        stderr = self._check(root).stderr
+        assert "git add" in stderr
+        assert "HYGIENE_ALLOW_PARTIAL_STAGE" in stderr
+
+    def test_the_escape_works(self, tmp_path):
+        """Non-vacuity for the refusal: `git add -p` is a real workflow, and a
+        guard that refused it outright would be refusing the right thing."""
+        root = self._repo(tmp_path)
+        (root / "a.txt").write_text("two\n")
+        subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True)
+        (root / "a.txt").write_text("three\n")
+        result = self._check(root, {"HYGIENE_ALLOW_PARTIAL_STAGE": "1"})
+        assert result.returncode == 0
+        assert "deliberately" in result.stdout
+
+    def test_an_unstaged_edit_alone_is_not_a_problem(self, tmp_path):
+        """Only the INTERSECTION matters. Editing a file you are not committing
+        is ordinary work, and refusing it would make the guard fire constantly."""
+        root = self._repo(tmp_path)
+        (root / "b.txt").write_text("new\n")
+        subprocess.run(["git", "-C", str(root), "add", "b.txt"], check=True)
+        (root / "a.txt").write_text("edited but not staged\n")
+        assert self._check(root).returncode == 0
+
+    def test_no_git_is_cannot_tell_and_exits_clean(self, tmp_path):
+        """Prose and a clean exit. A check that could not run says so rather
+        than blocking a commit in an environment it cannot see."""
+        result = self._check(tmp_path / "not-a-repo")
+        assert result.returncode == 0
+        assert "NOT checked" in result.stdout
+
+
+class TestTheHookRunsTheStagedCheckFirst:
+    def test_the_pre_commit_hook_runs_it(self):
+        pre = ROOT / ".githooks" / "pre-commit"
+        commands = [l for l in pre.read_text().splitlines()
+                    if l.strip() and not l.lstrip().startswith("#")]
+        assert any("--staged-is-what-ships" in line for line in commands)
+
+    def test_it_runs_BEFORE_the_checks_it_invalidates(self):
+        """Order is the whole point. Running it last would let the checks above
+        report a pass on files that are not being committed, and only then
+        mention that they could not have."""
+        pre = ROOT / ".githooks" / "pre-commit"
+        commands = "\n".join(l for l in pre.read_text().splitlines()
+                             if l.strip() and not l.lstrip().startswith("#"))
+        first = commands.index("--staged-is-what-ships")
+        rest = [i for i in range(len(commands))
+                if commands.startswith("python3", i) and i > first]
+        assert rest, "nothing runs after it; the ordering claim is vacuous"
+        assert first < min(rest)
