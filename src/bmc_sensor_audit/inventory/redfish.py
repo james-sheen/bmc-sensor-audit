@@ -268,6 +268,20 @@ class RedfishClient:
             self._auth = "Basic " + base64.b64encode(raw).decode()
         self._ctx: ssl.SSLContext | None = None
         self._opener: urllib.request.OpenerDirector | None = None
+        if (pin_sha256 is not None or cafile is not None) and \
+                not self.base_url.lower().startswith("https://"):
+            # **A declared expectation must never be met with silence.** urllib
+            # picks a handler by SCHEME, so a pinned HTTPS handler is simply not
+            # consulted for an `http://` URL: the pin would be built, ignored,
+            # and the walk would succeed unverified. An operator who typed a
+            # fingerprint would believe the connection was checked.
+            #
+            # Found by a downstream end-to-end test that pinned a wrong
+            # certificate and expected the walk to FAIL. It passed.
+            raise CertificatePinError(
+                f"{'--pin-sha256' if pin_sha256 else '--cafile'} was given for "
+                f"{self.base_url}, which is not https. Nothing would verify the "
+                f"connection and the flag would be silently ignored")
         if pin_sha256 is not None:
             # **Pinning REPLACES chain verification, it does not add to it.** A
             # BMC's certificate is self-signed and chains to nothing, so there is

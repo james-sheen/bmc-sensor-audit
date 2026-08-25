@@ -226,3 +226,50 @@ class TestTheBmcCanBeVerified:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+class TestATlsFlagOnANonHttpsTargetIsRefused:
+    """The defect 0.1.3 shipped, found by a consumer's end-to-end test.
+
+    **urllib picks a handler by SCHEME.** A pinned HTTPS handler is never
+    consulted for an `http://` URL, so the pin was built, ignored, and the walk
+    succeeded unverified. An operator who typed a fingerprint would have
+    believed the connection was checked — which is worse than not offering
+    pinning at all.
+
+    It was invisible to every test here, because they all built a client and
+    inspected it rather than walking anything. The downstream test that found it
+    pinned a WRONG certificate and expected the walk to fail. It passed.
+    """
+
+    @pytest.mark.parametrize("kwargs", [
+        {"pin_sha256": PIN},
+        {"cafile": "/etc/ssl/certs/ca-certificates.crt"},
+    ])
+    def test_http_with_a_tls_flag_is_refused(self, kwargs):
+        with pytest.raises(CertificatePinError, match="not https"):
+            RedfishClient("http://bmc.example", **kwargs)
+
+    @pytest.mark.parametrize("kwargs", [
+        {"pin_sha256": PIN},
+        {"cafile": None},
+    ])
+    def test_https_still_works(self, kwargs):
+        """Non-vacuity: the refusal must be about the scheme, not about the
+        flags existing at all."""
+        assert RedfishClient("https://bmc.example", **kwargs) is not None
+
+    def test_plain_http_without_tls_flags_is_untouched(self):
+        """The mock server speaks HTTP, and so do plenty of lab BMCs. Refusing
+        those would break every test and every bring-up bench."""
+        assert RedfishClient("http://bmc.example") is not None
+
+    def test_the_refusal_names_which_flag(self):
+        with pytest.raises(CertificatePinError, match="--pin-sha256"):
+            RedfishClient("http://bmc.example", pin_sha256=PIN)
+        with pytest.raises(CertificatePinError, match="--cafile"):
+            RedfishClient("http://bmc.example", cafile="/dev/null")
+
+    def test_the_scheme_check_is_case_insensitive(self):
+        """`HTTPS://` is a legal URL and would otherwise be refused."""
+        assert RedfishClient("HTTPS://bmc.example", pin_sha256=PIN) is not None
+
