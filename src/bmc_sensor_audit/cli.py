@@ -30,7 +30,8 @@ from .inventory.declaration_source import (DeclarationSourceError,
                                            load_declaration_source, merge_sources)
 from .inventory.diff import compare
 from .inventory.entity_manager import load_declaration
-from .inventory.redfish import (RedfishClient, Walk, order_walks, validate_walk,
+from .inventory.redfish import (CertificatePinError, RedfishClient, Walk,
+                                order_walks, validate_walk,
                                 etag_cache, membership_unchanged,
                                 walk_chassis, walk_digest, walk_from_dict)
 from .inventory.regression import compare_walks, parse_prefix_map
@@ -969,11 +970,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: Refusals this tool makes before it can start work. **Every one is exit 2.**
+#:
+#: A refusal that escapes as a traceback exits `1` -- and `1` means FINDINGS in
+#: this family's vocabulary, so a fleet collector reads a misconfigured flag as
+#: *the machine has problems*. That is not a cosmetic difference; it is the tool
+#: answering a question nobody asked.
+#:
+#: `CertificatePinError` was added here after exactly that: a pin on an
+#: `http://` target refused correctly and crashed, and the consumer saw `1`.
+#: A tuple rather than a chain of `except` clauses, so adding a refusal is one
+#: edit in one place and the test below can enumerate it.
+REFUSALS = (CredentialError, CertificatePinError)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except CredentialError as error:
+    except REFUSALS as error:
         print(f"{error}", file=sys.stderr)
         return EXIT_INCOMPLETE
 

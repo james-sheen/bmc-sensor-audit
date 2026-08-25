@@ -21,12 +21,19 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.1.4**, tagged `v0.1.4`, Apache-2.0, on PyPI as
+**Released — 0.1.5**, tagged `v0.1.5`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
-**0.1.4 refuses a TLS flag that would be silently ignored.** `--pin-sha256` and
+**0.1.5 makes a refusal exit 2.** `1` means FINDINGS here, and an uncaught
+refusal exits `1` — so the scheme check below, correct and uncaught in 0.1.4,
+had a fleet collector reading a misconfigured flag as *this machine has
+problems*. `main` now catches a named tuple of refusals, and a test enumerates
+every error class this package defines so the next one is considered when it is
+written.
+
+**0.1.4 refused a TLS flag that would be silently ignored.** `--pin-sha256` and
 `--cafile` on an `http://` target now fail at construction. urllib picks a
 handler by scheme, so the pinned HTTPS handler was never consulted for a plain
 URL: the pin was built, ignored, and the walk succeeded unverified. An operator
@@ -69,7 +76,7 @@ is the disclosure the parsed capture exists to avoid. It probes collections
 instead, answers *has the sensor set changed*, and prints that it checked
 membership and not configuration.
 
-**What 0.1.4 does not have, since silence about it would be the wrong lesson.**
+**What 0.1.5 does not have, since silence about it would be the wrong lesson.**
 No capture from **physical** hardware. Every fixture here came from an emulator
 or from upstream, which is described further down rather than implied away. The
 previous version of this paragraph recorded that criterion as honestly open and
@@ -99,7 +106,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 679 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 683 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -502,7 +509,7 @@ which is how a repository ends up unable to release its own 1.0.
 
 | Tag | Versions | Installs |
 |---|---|---|
-| `v0.1.4` | the tool, on PyPI | — |
+| `v0.1.5` | the tool, on PyPI | — |
 | `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
 
 **`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the

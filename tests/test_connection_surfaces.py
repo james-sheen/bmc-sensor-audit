@@ -273,3 +273,70 @@ class TestATlsFlagOnANonHttpsTargetIsRefused:
         """`HTTPS://` is a legal URL and would otherwise be refused."""
         assert RedfishClient("HTTPS://bmc.example", pin_sha256=PIN) is not None
 
+class TestARefusalIsExitTwoNotATraceback:
+    """`1` means FINDINGS here. A refusal that escapes as a traceback exits `1`.
+
+    **Found by the consumer, immediately after the fix above shipped.** The
+    scheme refusal was correct and uncaught: `capture` crashed, Python exited
+    `1`, and a fleet collector read a misconfigured flag as *this machine has
+    findings*. The tool answered a question nobody asked.
+
+    So `main` catches a named tuple rather than one class — adding a refusal is
+    one edit, and this test can enumerate what is covered.
+    """
+
+    def _run(self, argv):
+        import contextlib, io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = cli.main(argv)
+        return code, err.getvalue()
+
+    def test_a_pin_on_http_exits_two(self, tmp_path):
+        code, err = self._run(["capture", "--target", "http://bmc.example",
+                               "--out", str(tmp_path / "w.json"),
+                               "--pin-sha256", PIN])
+        assert code == 2, "a refusal came back as findings or as a crash"
+        assert "not https" in err
+
+    def test_a_missing_password_variable_exits_two(self, tmp_path, monkeypatch):
+        """The refusal that was already covered, kept so the tuple is proved to
+        hold more than one member."""
+        monkeypatch.delenv("BMC_PASS_ABSENT", raising=False)
+        code, err = self._run(["capture", "--target", "https://bmc.example",
+                               "--out", str(tmp_path / "w.json"),
+                               "--password-env", "BMC_PASS_ABSENT"])
+        assert code == 2
+        assert "not set" in err
+
+    def test_every_refusal_is_an_exception_class(self):
+        assert cli.REFUSALS
+        for refusal in cli.REFUSALS:
+            assert isinstance(refusal, type) and issubclass(refusal, Exception)
+
+    def test_the_error_classes_this_package_defines_are_accounted_for(self):
+        """**The class, not the instance.** A new `...Error` that nothing
+        catches is the next uncaught traceback, and this names it at the moment
+        it is written rather than when a consumer trips over it.
+
+        Locally-caught ones are listed by name: each is caught inside the
+        subcommand that raises it, which is the other correct answer.
+        """
+        import pathlib
+        caught_locally = {"SupplementalError", "UnknownResourceType",
+                          "DeclarationSourceError"}
+        in_main = {r.__name__ for r in cli.REFUSALS}
+        src = pathlib.Path(__file__).resolve().parents[1] / "src" / "bmc_sensor_audit"
+        defined = set()
+        for path in src.rglob("*.py"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("class ") and "Error" in line.split("(")[0]:
+                    defined.add(line.split()[1].split("(")[0])
+                elif line.startswith("class UnknownResourceType"):
+                    defined.add("UnknownResourceType")
+        unaccounted = defined - in_main - caught_locally
+        assert not unaccounted, (
+            f"{sorted(unaccounted)} are raised by this package and neither "
+            f"caught in main nor listed as caught locally. An uncaught refusal "
+            f"exits 1, which means FINDINGS")
+
