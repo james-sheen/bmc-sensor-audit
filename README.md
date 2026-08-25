@@ -301,6 +301,44 @@ that file declared are unverifiable, not absent, so the run has not checked the
 board it was pointed at — one corrupt file in an otherwise good directory is the
 version of this that looks clean from every other angle.
 
+## A machine to test against, without a machine
+
+`bmc_sensor_audit.testing` ships in the wheel and serves a real Redfish tree over
+real HTTP, so anything that drives this tool -- a pipeline, a fleet collector,
+your own CI -- can be exercised end to end with no hardware.
+
+It was shipped and never written down: the feature table above has advertised it
+since the first release, and nothing anywhere showed how to call it. The one
+person who found out did so by reading the source.
+
+```python
+from bmc_sensor_audit.testing.mock_redfish import MockBMC, MockSensor, serve
+import subprocess
+
+bmc = MockBMC(sensors=[MockSensor(name="Fan_CPU_1"),
+                       MockSensor(name="Inlet_Temp", reading=22.5)])
+with serve(bmc) as url:
+    subprocess.run(["bmc-sensor-audit", "capture", "--target", url,
+                    "--out", "walk.json"])
+```
+
+    OUTCOME walked
+    wrote 2 sensor(s) to walk.json
+
+`serve` is a context manager and yields the base URL; the server stops on exit.
+
+- `MockSensor(name, reading=20.0, units="Cel", state="Enabled", health="OK", ...)`
+  and the four thresholds, so a sensor can be given a shape worth judging.
+- `MockBMC(sensors=[...], shape="sensors", fail={}, etags=False)`.
+  `shape` picks the tree, `etags` serves collection ETags so `--etag-cache` can
+  be exercised, and `fail` maps a path to an HTTP status -- **a subtree can be
+  made to fail without taking the target down**, which is the case a naive tool
+  renders as a chassis full of missing sensors.
+- `add`, `remove` and `disable` change the machine between two captures, which is
+  what the firmware regression gate is for.
+
+`tests/test_readme_commands.py` runs the block above as written.
+
 ## What it finds
 
 Presence is three-valued, not two. Present and reading, present but disabled or

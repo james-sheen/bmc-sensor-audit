@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -255,3 +257,65 @@ class TestTheReadmeTestCount:
         assert int(claimed.group(1)) == int(found.group(1)), (
             f"README claims {claimed.group(1)} tests, pytest collects {found.group(1)} "
             "— update the README in the same change that added or removed tests")
+
+
+class TestTheDocumentedMockBlockRuns:
+    """The README's Python block, executed as printed.
+
+    Extracted from the file rather than restated here: a copy in this test is a
+    copy that can drift, and the whole point is that the text a reader runs is
+    the text that was checked. Rewriting the command into something equivalent
+    would test the rewriter -- which is how a broken quickstart survived four
+    releases of a sibling package.
+    """
+
+    @staticmethod
+    def _block() -> str:
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        section = text.split("## A machine to test against, without a machine", 1)
+        assert len(section) == 2, "the mock section is gone from the README"
+        body = section[1]
+        start = body.index("```python") + len("```python")
+        return body[start:body.index("```", start)]
+
+    def test_the_block_names_the_public_surface(self):
+        """Runs everywhere, including where the console script is absent."""
+        block = self._block()
+        for name in ("MockBMC", "MockSensor", "serve"):
+            assert name in block, f"the documented block no longer shows {name}"
+
+    def test_every_name_the_prose_promises_exists(self):
+        """The bullets below the block are claims about an API."""
+        from bmc_sensor_audit.testing import mock_redfish
+        import inspect
+        for name in ("MockBMC", "MockSensor", "serve"):
+            assert hasattr(mock_redfish, name), f"{name} is documented and absent"
+        for name in ("add", "remove", "disable"):
+            assert hasattr(mock_redfish.MockBMC, name), (
+                f"MockBMC.{name} is documented and absent")
+        parameters = inspect.signature(mock_redfish.MockBMC).parameters
+        for name in ("sensors", "shape", "fail", "etags"):
+            assert name in parameters, (
+                f"MockBMC({name}=...) is documented and is not a parameter")
+
+    def test_the_block_actually_runs(self, tmp_path):
+        # The block needs BOTH halves, and the first version of this guard
+        # checked one: the console script on PATH, and the package importable by
+        # the interpreter that runs the block. With only the first it ran and
+        # died on `No module named bmc_sensor_audit`, which is the environment
+        # failing rather than the documentation being wrong.
+        importable = subprocess.run(
+            [sys.executable, "-c", "import bmc_sensor_audit"],
+            capture_output=True).returncode == 0
+        if shutil.which("bmc-sensor-audit") is None or not importable:
+            pytest.skip("the documented block needs the console script on PATH "
+                        "and the package importable here; one is missing, so "
+                        "the block was never executed and nothing was checked")
+        script = tmp_path / "block.py"
+        script.write_text(self._block(), encoding="utf-8")
+        done = subprocess.run([sys.executable, str(script)],
+                              cwd=str(tmp_path), capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        assert "OUTCOME walked" in done.stdout
+        walk = json.loads((tmp_path / "walk.json").read_text())
+        assert len(walk["sensors"]) == 2, "the block's two sensors did not arrive"
