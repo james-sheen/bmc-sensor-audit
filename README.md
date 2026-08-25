@@ -21,27 +21,39 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.1.1**, tagged `v0.1.1`, Apache-2.0, on PyPI as
+**Released — 0.1.2**, tagged `v0.1.2`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
-**0.1.1 is the consumer's half of two formats.** The person who receives a
-capture can now check it — `validate-walk`, no engine and no hardware — and
-`walk/1` has a written stability statement for a downstream pin to pin to.
-`capture --print-digest` prints a content handle a fleet collector binds to a
-unit on its own side of the line; no identity field enters `walk/1`. Platforms
-whose sensors are discovered at runtime rather than declared can supply a
-reviewed `pdr/1`, and `regression` pairs across a **declared** aggregation-prefix
-change. The engine floor moved to 0.1.8, derived by running the canary against
-every release the old range admitted.
+**0.1.2 is what a fleet collector needed and could not reach.** All four of its
+surfaces were reported from outside, by building one: `--password-env` and
+`--password-file` keep a credential out of argv, where `ps` reads it on a shared
+host; `--cafile` and `--pin-sha256` verify a BMC, where `--insecure` had been
+the only control; an empty `OLD` in `--aggregation-prefix` declares a prefix that
+was **added**, which is the direction aggregation actually goes; and
+`capture --etag-cache` asks whether the sensor set changed before walking.
 
-**What 0.1.1 does not have, since silence about it would be the wrong lesson.**
+**None of them is a bug.** Each is a surface that was never there, which is a
+thing a test suite cannot find — it asks whether what exists is correct. Only a
+second program with a real job discovers that what it needed was missing.
+
+`--etag-cache` is deliberately narrower than it was asked to be. A walk is many
+resources, so there is no single ETag; and using a `304` per resource means
+keeping the previous **body**, which would put raw Redfish payloads on disk. That
+is the disclosure the parsed capture exists to avoid. It probes collections
+instead, answers *has the sensor set changed*, and prints that it checked
+membership and not configuration.
+
+**What 0.1.2 does not have, since silence about it would be the wrong lesson.**
 No capture from **physical** hardware. Every fixture here came from an emulator
 or from upstream, which is described further down rather than implied away. The
 previous version of this paragraph recorded that criterion as honestly open and
 *not the same thing as a release blocker* — releasing without it is that sentence
-being kept, not quietly dropped. Stage 3, fleet comparison, is not started.
+being kept, not quietly dropped. Fleet comparison is not in this repository and
+was never going to be: it ships as a separate tool,
+[`fleet-sensor-baseline`](https://github.com/james-sheen/fleet-sensor-baseline),
+which consumes this one's published surfaces and never imports it.
 
 *Not done yet* and *waiting for X* are different claims, and only the written one
 can be checked by a reader — which is the whole argument this tool makes about
@@ -66,7 +78,7 @@ belongs in this paragraph.
 | Tests | 658 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
-| Fleet comparison (Stage 3) | not started |
+| Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
 
 **Acceptance criteria, honestly**: 1, 3 and 4 are met, and **criterion 1 is now
 reproducible by a reader** rather than only by us — thirteen upstream configurations
@@ -438,7 +450,7 @@ which is how a repository ends up unable to release its own 1.0.
 
 | Tag | Versions | Installs |
 |---|---|---|
-| `v0.1.1` | the tool, on PyPI | — |
+| `v0.1.2` | the tool, on PyPI | — |
 | `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
 
 **`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the
