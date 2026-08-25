@@ -106,7 +106,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | 686 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
+| Tests | 691 collected with no dependencies installed; the ones that read YAML — the serialised model, and the action definition — skip without PyYAML, so CI installs it; the `[detect]` extra adds an engine canary |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -247,6 +247,18 @@ checking left on. `--pin-sha256 FINGERPRINT` requires one exact certificate and
 **replaces** chain verification, which is the only thing that works for the
 self-signed certificate a BMC ships. Both are alternatives to `--insecure`,
 which remains what it was.
+
+**Alternatives, so asking for two opposite things is refused.** `--insecure`
+beside either of them exits `2`: one turns verification off and the other turns
+it on, and whichever this preferred would be a guess at which you meant. It used
+to resolve that silently -- the pin won, so `--insecure --pin-sha256 <fp>` gave
+a *verified* connection, and an operator reading the precedence the other way
+round believed the opposite.
+
+`--cafile` **with** a pin stays legal, because both verify: a fleet CA plus one
+recorded machine is a real setup, and it is how `fleet-sensor-baseline` drives
+this -- a run-level CA with per-target pins. Between two flags that both verify,
+the pin wins, and that is documented rather than guessed.
 
 `capture --print-digest` prints the same handle when the file is written — the
 SHA-256 of the bytes, which `sha256sum` reproduces. A fleet collector binds

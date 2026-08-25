@@ -282,6 +282,25 @@ class RedfishClient:
                 f"{'--pin-sha256' if pin_sha256 else '--cafile'} was given for "
                 f"{self.base_url}, which is not https. Nothing would verify the "
                 f"connection and the flag would be silently ignored")
+        if not verify_tls and (pin_sha256 is not None or cafile is not None):
+            # The same reasoning as the refusal above, one door further out.
+            # `--insecure` turns verification OFF and these turn it ON, so one
+            # of the two was going to be discarded -- and it was discarded
+            # SILENTLY, by a precedence nobody typed. An operator who wrote
+            # `--insecure --pin-sha256 <fp>` got a verified connection, and one
+            # who read the precedence the other way round would have believed
+            # the opposite. Neither reading is wrong enough to guess between.
+            #
+            # Two flags that both VERIFY are a different case and stay legal:
+            # `--cafile` with a pin is a fleet CA plus one recorded machine, and
+            # `fleet-sensor-baseline` relies on exactly that -- a run-level CA
+            # with per-target pins. Precedence is documented there and here.
+            raise CertificatePinError(
+                f"--insecure was given with "
+                f"{'--pin-sha256' if pin_sha256 is not None else '--cafile'}. "
+                f"One turns verification off and the other turns it on, so "
+                f"whichever this preferred would be a guess at which you meant. "
+                f"Drop one")
         if pin_sha256 is not None:
             # **Pinning REPLACES chain verification, it does not add to it.** A
             # BMC's certificate is self-signed and chains to nothing, so there is

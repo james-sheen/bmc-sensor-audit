@@ -389,3 +389,49 @@ class TestTheToolCanBeAskedWhatItIs:
         name, _, version = done.stdout.strip().partition(" ")
         assert name == "bmc-sensor-audit"
         assert tuple(int(p) for p in version.split(".")[:3]) >= (0, 1, 5)
+
+
+class TestVerifyingAndNotVerifyingAtOnce:
+    """`--insecure` beside a flag that verifies, which this used to accept.
+
+    The refusal above exists because a TLS flag that would be **silently
+    ignored** must not be accepted. That reasoning stops one door short: an
+    `http://` target got the refusal, and `--insecure --pin-sha256 <fp>` on an
+    `https://` one was resolved by a precedence nobody typed. The pin won, so
+    the connection was verified -- and an operator reading the precedence the
+    other way round would have believed the opposite. Neither reading is wrong
+    enough to guess between.
+
+    **`fleet-sensor-baseline` already refused the same pair** at target level:
+    *"A pin is the verification and 'insecure' removes it."* One family, one
+    question, and two answers until now.
+    """
+
+    @pytest.mark.parametrize("kwargs", [
+        {"pin_sha256": PIN},
+        {"cafile": "/etc/ssl/certs/ca-certificates.crt"},
+    ])
+    def test_insecure_beside_a_verifying_flag_is_refused(self, kwargs):
+        with pytest.raises(CertificatePinError, match="turns verification off"):
+            RedfishClient("https://bmc.example", verify_tls=False, **kwargs)
+
+    def test_two_verifying_flags_stay_legal(self):
+        """**The case that must not be broken by the refusal above.** A fleet CA
+        plus one recorded machine is a real configuration -- a run-level
+        `--cafile` with per-target pins is how `fleet-sensor-baseline` drives
+        this -- and both flags verify, so precedence is a documented choice
+        rather than a guess between opposites."""
+        RedfishClient("https://bmc.example", pin_sha256=PIN,
+                      cafile="/etc/ssl/certs/ca-certificates.crt")
+
+    def test_insecure_alone_still_works(self):
+        """Non-vacuity: BMCs ship self-signed certificates as a rule, and
+        `--insecure` on its own is the flag for that."""
+        RedfishClient("https://bmc.example", verify_tls=False)
+
+    def test_the_refusal_is_incomplete_not_findings(self):
+        """A misconfigured flag is `2`. Exiting `1` would tell a fleet collector
+        this machine has problems -- which is the defect 0.1.5 shipped to fix,
+        in the sibling of this refusal."""
+        from bmc_sensor_audit.cli import REFUSALS
+        assert CertificatePinError in REFUSALS
