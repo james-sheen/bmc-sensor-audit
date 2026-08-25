@@ -21,12 +21,26 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.1.2**, tagged `v0.1.2`, Apache-2.0, on PyPI as
+**Released — 0.1.3**, tagged `v0.1.3`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
-**0.1.2 is what a fleet collector needed and could not reach.** All four of its
+**0.1.3 is two contracts and a guard.**
+
+`capture` now prints exactly one `OUTCOME ` line — `walked` or `unchanged` — and
+**that line is contract while the rest of its output is prose.** Before it, a
+skip and a walk both exited `0` and differed only in a sentence, so a consumer
+had to match prose that nothing promised to keep. Reported from outside as issue
+#6, against a feature one release old.
+
+The pre-commit hook refuses a commit whose index and working tree disagree,
+first, before anything else runs. Every other check in it reads the working tree
+while the commit records the index — so when those differ, a green hook is green
+about files that are not being committed. This repository shipped a README test
+count six short, twice in one day, with its own count check passing both times.
+
+**0.1.2 was what a fleet collector needed and could not reach.** All four of its
 surfaces were reported from outside, by building one: `--password-env` and
 `--password-file` keep a credential out of argv, where `ps` reads it on a shared
 host; `--cafile` and `--pin-sha256` verify a BMC, where `--insecure` had been
@@ -45,7 +59,7 @@ is the disclosure the parsed capture exists to avoid. It probes collections
 instead, answers *has the sensor set changed*, and prints that it checked
 membership and not configuration.
 
-**What 0.1.2 does not have, since silence about it would be the wrong lesson.**
+**What 0.1.3 does not have, since silence about it would be the wrong lesson.**
 No capture from **physical** hardware. Every fixture here came from an emulator
 or from upstream, which is described further down rather than implied away. The
 previous version of this paragraph recorded that criterion as honestly open and
@@ -478,7 +492,7 @@ which is how a repository ends up unable to release its own 1.0.
 
 | Tag | Versions | Installs |
 |---|---|---|
-| `v0.1.2` | the tool, on PyPI | — |
+| `v0.1.3` | the tool, on PyPI | — |
 | `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.1,<0.2`, with the `[detect]` extra when `mode: detect` |
 
 **`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the
