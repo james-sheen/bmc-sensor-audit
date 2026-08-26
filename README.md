@@ -21,10 +21,18 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.1.5**, tagged `v0.1.5`, Apache-2.0, on PyPI as
+**Released — 0.2.0**, tagged `v0.2.0`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.2.0 is a compatibility break, and small.** One refusal is new: `--insecure`
+beside `--pin-sha256` or `--cafile` is now rejected instead of silently winning,
+so a command that asked to verify and not to verify at once no longer runs
+unverified. `--cafile` with a pin stays legal. `--version` is new, so a caller
+can ask what it is talking to instead of reading installed metadata. The rest of
+this release is the suite: every Python `requires-python` admits now runs in CI,
+which is how two end-to-end tests were found dead on 3.13 and 3.14.
 
 **0.1.5 makes a refusal exit 2.** `1` means FINDINGS here, and an uncaught
 refusal exits `1` — so the scheme check below, correct and uncaught in 0.1.4,
