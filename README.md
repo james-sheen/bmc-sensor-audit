@@ -21,10 +21,19 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.2.0**, tagged `v0.2.0`, Apache-2.0, on PyPI as
+**Released — 0.2.1**, tagged `v0.2.1`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.2.1 owns a specification it had been delegating.** This build reads
+`bmc-sensor-audit/fleet-baseline/1` and said the format was defined by the
+downstream fleet layer. That layer defines a different namespace and refuses to
+downgrade to this one, so nothing anywhere defined it and no converter existed —
+two documents describing a seam neither had built. It is specified here now, and
+`fleet-sensor-baseline baseline --for-referee` produces it. The README's test
+count also gained the qualifier it was missing: 693 collected with PyYAML and 673
+without, both pinned by a check that measures each population instead of one.
 
 **0.2.0 is a compatibility break, and small.** One refusal is new: `--insecure`
 beside `--pin-sha256` or `--cafile` is now rejected instead of silently winning,
