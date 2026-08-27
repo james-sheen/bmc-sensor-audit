@@ -35,9 +35,15 @@ Two rules follow, and they are the whole of the design:
    `fleet-baseline/1` additionally says in words that it is a downgrade. Silence
    cannot impersonate the manufacturer.
 
-**Unknown keys are ignored, by the `/1` rule.** `fleet-baseline/1` is defined by the
-downstream fleet layer, not here. What is defined HERE is the subset this reader
-consumes; a producer may carry whatever else it needs.
+**Unknown keys are ignored, by the `/1` rule.** A producer may carry whatever else
+it needs -- `fleet-sensor-baseline` uses that to record the sensors its cohort
+disagreed about, which are precisely the ones it must not declare.
+
+**This format is defined HERE**, in `docs/declaration-sources.md`. It used to say it
+was defined by the downstream fleet layer; that layer's own baseline is
+`fleet-sensor-baseline/fleet-baseline/2`, a different namespace, and no converter
+existed in either direction. Delegating a specification to somebody who did not
+know they had it is how a seam gets described twice and built never.
 """
 
 from __future__ import annotations

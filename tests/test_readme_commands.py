@@ -223,40 +223,110 @@ class TestTheReadmeTestCount:
         return [str(ROOT / path) for path in paths
                 if not path.endswith("test_engine_bridge.py")]
 
-    def test_the_readme_count_matches_what_pytest_collects(self):
-        """Measured on the DEPENDENCY-FREE suite, which is a population that does not
-        depend on what happens to be installed.
+    #: A directory placed at the front of `PYTHONPATH` whose `sitecustomize`
+    #: makes `import yaml` fail. `site` imports it at interpreter start, before
+    #: pytest collects anything, so a module-level `importorskip` sees exactly
+    #: what it would see on a machine with nothing installed.
+    #:
+    #: Blocking rather than uninstalling: the alternative is a second virtual
+    #: environment per run, and a check nobody can afford to run is a check
+    #: that gets deleted.
+    _BLOCK_YAML = "import sys\nsys.modules['yaml'] = None\n"
 
-        The optional `[detect]` extra adds the engine-bridge tests, so without the
-        ignore below the figure would differ by whether the engine is present, and
-        the check would go red for a legitimate reason on any machine that has the
-        extra. A row like that teaches people to skip the whole check, which costs
-        more than the check is worth.
-
-        This docstring used to name two specific figures, and both had gone stale --
-        the defect this test exists to catch, one layer in. A count belongs where
-        something derives it, never in prose beside it.
-
-        **The population is what git TRACKS, not what the directory holds.** The
-        README describes the repository, and the two are not the same thing: the
-        published 289 was measured on a working tree carrying a test file that was
-        never committed, so it was true of that disk and false of this project. A
-        count taken from the disk is true only on the machine that took it.
-        """
+    def _collect(self, tmp_path=None, *, with_yaml: bool) -> int:
+        env = dict(os.environ)
+        if not with_yaml:
+            shim = tmp_path / "noyaml"
+            shim.mkdir(exist_ok=True)
+            (shim / "sitecustomize.py").write_text(self._BLOCK_YAML)
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(shim)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
         collected = subprocess.run(
             [sys.executable, "-m", "pytest", *self._tracked_tests(),
              "--collect-only", "-q", "-p", "no:cacheprovider",
              "--ignore", str(ROOT / "tests" / "test_engine_bridge.py")],
-            cwd=str(ROOT), capture_output=True, text=True)
+            cwd=str(ROOT), capture_output=True, text=True, env=env)
         found = re.search(r"(\d+) tests? collected", collected.stdout)
         assert found, f"could not read a collection count:\n{collected.stdout[-400:]}"
+        return int(found.group(1))
 
-        claimed = re.search(r"\|\s*Tests\s*\|\s*(\d+)", README.read_text())
-        assert claimed, "the README Status table no longer states a test count"
+    @staticmethod
+    def _claimed() -> list[int]:
+        """Every number in the Tests row, in order. The row states TWO
+        populations and both are claims, so both are read."""
+        row = re.search(r"\|\s*Tests\s*\|([^|]*)\|", README.read_text())
+        assert row, "the README Status table no longer has a Tests row"
+        numbers = [int(n) for n in re.findall(r"\d+", row.group(1))]
+        assert len(numbers) >= 2, (
+            f"the Tests row states {len(numbers)} number(s); it is supposed to "
+            f"state the collected count with PyYAML and without it, because "
+            f"they differ and a single number cannot be true of both")
+        return numbers
 
-        assert int(claimed.group(1)) == int(found.group(1)), (
-            f"README claims {claimed.group(1)} tests, pytest collects {found.group(1)} "
-            "— update the README in the same change that added or removed tests")
+    def test_the_readme_count_matches_what_pytest_collects(self, tmp_path):
+        """The first number: PyYAML present, which is what CI runs.
+
+        This docstring used to name two specific figures and both had gone
+        stale -- the defect this test exists to catch, one layer in.
+        """
+        pytest.importorskip(
+            "yaml", reason="PyYAML is not installed, so the with-PyYAML "
+                           "population could not be measured here. The "
+                           "dependency-free number below still is")
+        assert self._claimed()[0] == self._collect(tmp_path, with_yaml=True), (
+            "the README's first test count and pytest disagree -- update the "
+            "README in the same change that added or removed tests")
+
+    def test_the_dependency_free_count_matches_too(self, tmp_path):
+        """The second number, and **the one the README used to get wrong**.
+
+        The row read *691 collected with no dependencies installed*. Measured
+        with nothing installed it is 671: the qualifier was off by the twenty
+        tests that read YAML. The figure had an owner -- this test -- and the
+        sentence around it did not, so the number stayed true and the claim
+        about it was false wherever PyYAML was absent, which is every
+        environment the sentence was describing.
+
+        A qualifier is part of a claim. Pinning the number and leaving the
+        qualifier in prose pins the half that was already right.
+        """
+        assert self._claimed()[1] == self._collect(tmp_path, with_yaml=False), (
+            "the README's dependency-free test count and pytest disagree")
+
+    def test_the_two_populations_differ_by_the_module_the_readme_names(
+            self, tmp_path):
+        """The README says the difference is exactly one module. That is a
+        claim about WHICH tests, not how many, and a count cannot check it.
+
+        Also the non-vacuity of the pair above: if the shim stopped working,
+        both numbers would measure the same population and agree forever.
+        """
+        pytest.importorskip("yaml", reason="both populations need to differ "
+                                           "before the difference can be named")
+        with_yaml, without = self._collect(tmp_path, with_yaml=True), \
+            self._collect(tmp_path, with_yaml=False)
+        assert with_yaml > without, (
+            "blocking PyYAML changed nothing, so the shim is not working and "
+            "the dependency-free count above is measuring the wrong thing")
+
+        # Scoped to the Tests ROW, not to the whole file. A search over the
+        # README finds the first backticked test path anywhere in it, which is
+        # a different module and would compare an unrelated count -- a check
+        # reporting on its own regex rather than on the claim it was aimed at.
+        row = re.search(r"\|\s*Tests\s*\|([^|]*)\|", README.read_text())
+        assert row, "the README Status table no longer has a Tests row"
+        named = re.findall(r"`tests/(test_\w+\.py)`", row.group(1))
+        assert named, ("the Tests row no longer names the module that makes "
+                       "the gap between the two populations")
+        listed = subprocess.run(
+            [sys.executable, "-m", "pytest", str(ROOT / "tests" / named[0]),
+             "--collect-only", "-q", "-p", "no:cacheprovider"],
+            cwd=str(ROOT), capture_output=True, text=True)
+        found = re.search(r"(\d+) tests? collected", listed.stdout)
+        assert found and int(found.group(1)) == with_yaml - without, (
+            f"the README names {named[0]} as the whole difference between the "
+            f"two populations, and it accounts for "
+            f"{found.group(1) if found else 'no'} of {with_yaml - without}")
 
 
 class TestTheDocumentedMockBlockRuns:

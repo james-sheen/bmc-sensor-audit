@@ -110,9 +110,16 @@ two say it does not.
 ## Fields
 
 Every key the reader consumes. **Unknown keys are ignored, by the `/1` rule** — a
-producer may carry whatever else it needs, and `fleet-baseline/1` is defined by the
-downstream fleet layer rather than here. What is defined here is the subset this
-reader consumes.
+producer may carry whatever else it needs.
+
+**`bmc-sensor-audit/fleet-baseline/1` is defined here.** An earlier version of this
+sentence said it was defined by the downstream fleet layer, and that was measurably
+false: the fleet layer's own baseline format is `fleet-sensor-baseline/fleet-baseline/2`,
+a different namespace it refuses to downgrade, and nothing on either side converted
+between the two. Two documents pointed at each other across a seam that did not exist,
+and both refusals were correct and loud, which is why it survived a release. The
+producer of this format is `fleet-sensor-baseline baseline --for-referee`, and the
+table below is the specification it writes to.
 
 | Key | `pdr/1` | `fleet-baseline/1` | Meaning |
 |---|---|---|---|
@@ -143,3 +150,28 @@ bmc-sensor-audit coverage --config /usr/share/entity-manager/configurations \
 ```
 
 Step 2 is the product. Steps 1 and 3 are plumbing around it.
+
+## Where a `fleet-baseline/1` comes from
+
+`bmc-sensor-audit` reads this format and does not produce it. The producer is the
+fleet layer:
+
+```
+# derive a cohort baseline, and export it as a candidate for this tool
+fleet-sensor-baseline baseline --store ./store --model GB200-NVL-tray \
+    --out baseline.json --for-referee declaration.json
+
+# read it, then add the reviewed marker -- the same step 2 as above
+
+bmc-sensor-audit coverage --config em/ --walk unit.json \
+    --declaration declaration.json
+```
+
+**The export deliberately does not declare every sensor the cohort had.** A fleet
+baseline has three states — expected, foreign, and *the cohort disagrees with
+itself* — and this format has two, because it judges one machine against a list of
+what that machine should have. The disagreed-about sensors are carried in a key this
+reader ignores and named on stderr at export, so the reviewer sees what was left out
+before signing. Declaring them would expect a sensor of every unit that 8 percent of
+the fleet does not have, and charge a finding to each of those units for a fact about
+the cohort.
