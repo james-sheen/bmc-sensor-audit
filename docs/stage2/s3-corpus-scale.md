@@ -48,6 +48,21 @@ consistent — a falling per-evaluation curve is higher at the small end — but
 useful finding is elsewhere: **`check()` is not the expensive stage at this scale.
 Model load is, at roughly 3.4× the check.**
 
+> **Note added 2026-08-28.** Upstream answered this section as `arbiter-engine`
+> issue #8, and the answer moves the attribution rather than the timing.
+> `load_domain` parses the file itself when handed a path -- which is what `detect`
+> passes -- so the YAML parse sits INSIDE the call this row names, not beside it.
+> Measured here on this machine at this model's shape (180 indicators, 360
+> invariants, five rounds): `load_model(path)` 153.6 ms, of which the engine's own
+> loader is **3.5 ms, or 2.3%**. The rest is PyYAML. So `Model load` is the right
+> name for the stage and the wrong thing to read as a cost of the engine's loader.
+> The remedy follows from that: parse once with `yaml.CSafeLoader` and hand
+> `load_model` the mapping -- 19.2 ms against 146.7 ms here, taking the stage to
+> about 23 ms. **The 0.252 s above is left as measured and is NOT decomposed by
+> these figures**: it was a different run over the real generated corpus, and
+> splitting one run's total using another run's shares is the mistake this note
+> exists to correct, not repeat.
+
 That inverts the thing worth watching. The earlier granularity measurement recorded
 `check()` as superlinear in entity-type count and flagged it as the risk at 10⁴. It
 still is, eventually. At the scale this tool actually meets — one platform's

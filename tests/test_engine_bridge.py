@@ -1132,11 +1132,14 @@ class TestTheAttestationArtifact:
 class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
     """The scale question, asked of the corpus this tool actually meets.
 
-    Full measurement in `docs/stage2/s3-corpus-scale.md`. Two things it found that
-    change what is worth asserting: model load costs about 3.4x the check at this
-    size, inverting the earlier prediction that `check()` was the thing to watch;
-    and the population the engine is asked about is the MODELLED set, not the
-    declared one.
+    Full measurement in `docs/stage2/s3-corpus-scale.md`, which is where the
+    numbers live -- restating them here is how the two copies drift. Two things it
+    found that change what is worth asserting: getting the model in, not `check()`,
+    dominates at this size, inverting the earlier prediction; and the population the
+    engine is asked about is the MODELLED set, not the declared one. That first
+    finding has since been re-attributed -- the cost is PyYAML, inside the load call
+    rather than beside it, not the engine's own loader -- and the doc carries the
+    dated note with figures measured here.
 
     The ceiling is deliberately about thirty times the measured median. Measured
     spread is roughly a third of the median, so a tight bound would go red on
