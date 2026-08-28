@@ -21,10 +21,16 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.2.1**, tagged `v0.2.1`, Apache-2.0, on PyPI as
+**Released — 0.2.2**, tagged `v0.2.2`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.2.2 keeps the verdict when the reader stops reading.** A report piped into
+`head` used to lose its exit code — a long one exited `1`, which means findings
+here, and a short one failed at the interpreter's flush. The run now returns the
+code it computed. A refused certificate on the ETag probe also read as *could not
+be reached*; it names the certificate now.
 
 **0.2.1 owns a specification it had been delegating.** This build reads
 `bmc-sensor-audit/fleet-baseline/1` and said the format was defined by the
