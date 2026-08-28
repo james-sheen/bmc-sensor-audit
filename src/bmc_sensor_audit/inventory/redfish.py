@@ -870,6 +870,16 @@ def membership_unchanged(client: "RedfishClient",
         except urllib.error.HTTPError as error:
             return None, f"{path} answered {error.code}; the tree may have moved"
         except OSError as error:
+            # **A refused certificate is not an unreachable BMC.** urllib wraps
+            # the SSL failure in a `URLError`, so the real exception is an
+            # `OSError` and `isinstance(error, ssl.SSLError)` is False -- the
+            # reason carries it. Without this branch the machine answered, its
+            # certificate was rejected, and the operator was sent to the
+            # network to look for it.
+            reason = getattr(error, "reason", error)
+            if isinstance(reason, ssl.SSLError):
+                return None, (f"{path} presented a certificate this run would "
+                              f"not accept: {reason}")
             return None, f"{path} could not be reached: {error}"
         if verdict is False:
             return False, f"{path} changed"

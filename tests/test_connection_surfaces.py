@@ -27,8 +27,10 @@ which certificate would be accepted.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import ssl
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -37,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bmc_sensor_audit import cli  # noqa: E402
 from bmc_sensor_audit.inventory.redfish import (  # noqa: E402
-    CertificatePinError, RedfishClient, _pinned_opener)
+    CertificatePinError, RedfishClient, _pinned_opener, membership_unchanged)
 
 #: A syntactically valid pin, in the spelling `openssl` prints.
 PIN = ":".join("ab" for _ in range(32))
@@ -435,3 +437,83 @@ class TestVerifyingAndNotVerifyingAtOnce:
         in the sibling of this refusal."""
         from bmc_sensor_audit.cli import REFUSALS
         assert CertificatePinError in REFUSALS
+
+
+class TestTheEtagProbeCarriesTheSameTrustAsTheWalk:
+    """**A second request path, asked whether it kept the first one's promise.**
+
+    0.1.4 shipped a defect of exactly this shape: a different request path chose
+    its handler by scheme and dropped `--pin-sha256` on the way. `--etag-cache`
+    added another path -- a conditional GET, issued from `probe_unchanged`
+    rather than from the walk -- so the question is owed a second answer, and
+    the answer has to come from the code rather than from the intention.
+
+    No live handshake here, for the reason the module docstring gives. The
+    exception these tests raise is not invented: it is the object a real
+    verification failure produces, measured against a self-signed server
+    outside the suite. That measurement is the load-bearing part, because
+    urllib WRAPS the SSL error in a `URLError` -- so `isinstance(error,
+    ssl.SSLError)` is False on the real thing, and a handler written from the
+    obvious guess would never fire.
+    """
+
+    class _Client:
+        """Stands in for the socket, not for the code under test."""
+
+        def __init__(self, raises):
+            self._raises = raises
+
+        def probe_unchanged(self, path, etag):
+            raise self._raises
+
+    @staticmethod
+    def _cache():
+        return {"collections": {"/redfish/v1/Chassis/1/Sensors": '"e1"'}}
+
+    @staticmethod
+    def _verification_failure():
+        """What a self-signed certificate actually produces, wrapper and all."""
+        return urllib.error.URLError(ssl.SSLCertVerificationError(
+            1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+               "self-signed certificate (_ssl.c:1007)"))
+
+    def test_a_pin_failure_is_not_swallowed_into_cannot_tell(self):
+        """**The canary.** `membership_unchanged` converts `OSError` to *cannot
+        tell*, and *cannot tell* forces a full walk -- a safe answer that would
+        also quietly absorb a refused certificate if `CertificatePinError` ever
+        became an `OSError`. It is not one today, so the refusal propagates and
+        `main` renders it as `2`. This test fails the day that changes."""
+        client = self._Client(CertificatePinError("pinned certificate rejected"))
+        with pytest.raises(CertificatePinError):
+            membership_unchanged(client, self._cache())
+
+    def test_a_refused_certificate_is_not_reported_as_unreachability(self):
+        """The BMC answered. What it presented was not accepted. Reporting that
+        as *could not be reached* sends an operator to the network for a fault
+        that is in the trust store, and the sentence is the only thing they
+        get."""
+        verdict, sentence = membership_unchanged(
+            self._Client(self._verification_failure()), self._cache())
+        assert verdict is None
+        assert "could not be reached" not in sentence, (
+            "a certificate that was refused is being reported as a network "
+            "problem")
+        assert "certificate" in sentence
+
+    def test_a_genuine_network_failure_still_reads_as_unreachable(self):
+        """Non-vacuity. If every `OSError` were relabelled a trust problem, the
+        test above would pass and the sentence would be wrong the other way."""
+        verdict, sentence = membership_unchanged(
+            self._Client(urllib.error.URLError(ConnectionRefusedError(
+                111, "Connection refused"))), self._cache())
+        assert verdict is None
+        assert "could not be reached" in sentence
+
+    def test_the_probe_reuses_the_walks_opener_rather_than_its_own(self):
+        """Structural, and the reason the two paths cannot drift apart: a pin
+        installs `_opener`, and both the walk and the probe must open through
+        it. A second path that called `urlopen` directly would verify nothing
+        while every test above still passed."""
+        source = inspect.getsource(RedfishClient.probe_unchanged)
+        assert "self._opener.open" in source, (
+            "the conditional GET no longer opens through the pinned opener")

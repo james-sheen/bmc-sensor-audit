@@ -24,6 +24,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .inventory.declaration_source import (DeclarationSourceError,
@@ -992,13 +993,94 @@ def build_parser() -> argparse.ArgumentParser:
 REFUSALS = (CredentialError, CertificatePinError)
 
 
+class _StdoutThatOutlivesItsReader:
+    """`sys.stdout`, for a program whose exit code is a claim about a BMC.
+
+    **A reader that stops reading has said something about itself.** Piping a
+    report into `head` is an ordinary thing to do, and before this the writer
+    died of it two different ways: a report long enough to fill the pipe buffer
+    raised out of `print` and Python exited `1`, which this vocabulary reads as
+    FINDINGS; a short one survived to the interpreter's shutdown flush, printed
+    `Exception ignored` and exited `120`, which is not in the vocabulary at all.
+
+    Both replace a verdict about the hardware with a verdict about the
+    terminal. The report is fully rendered before it is printed, so the verdict
+    already exists when the pipe closes -- it is kept, the rest of the output is
+    dropped, and nothing is said about it.
+
+    Absorbing the error rather than refusing is the whole point: `REFUSALS`
+    returns `2`, and a clean audit whose reader left is not an incomplete audit.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self.reader_left = False
+
+    def _abandon(self) -> None:
+        """Point the descriptor at nowhere, then stop trying.
+
+        The interpreter flushes `stdout` again on the way out, on bytes this
+        stream may still be holding. Without the redirect that second flush
+        raises where no `except` can reach it, which is the `Exception ignored`
+        line and the `120`.
+        """
+        self.reader_left = True
+        try:
+            fileno = self._stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            return  # captured by a harness rather than piped; nothing to point
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), fileno)
+        except OSError:
+            pass
+
+    def write(self, text: str) -> int:
+        if self.reader_left:
+            return len(text)
+        try:
+            return self._stream.write(text)
+        except BrokenPipeError:
+            self._abandon()
+            return len(text)
+
+    def flush(self) -> None:
+        if self.reader_left:
+            return
+        try:
+            self._stream.flush()
+        except BrokenPipeError:
+            self._abandon()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    # Installed before the parser runs, because `--help` prints too and an
+    # operator reaching for `--help | head` is the likeliest reader of all.
+    stdout = _StdoutThatOutlivesItsReader(sys.stdout)
+    sys.stdout = stdout
     try:
+        args = build_parser().parse_args(argv)
         return args.func(args)
     except REFUSALS as error:
         print(f"{error}", file=sys.stderr)
         return EXIT_INCOMPLETE
+    except BrokenPipeError:
+        # Not the report: that one is absorbed above and never arrives here.
+        # A pipe that broke while writing somewhere else is a failure to
+        # deliver, and this tool says so with the code that means it.
+        print("the output could not be written: the pipe closed",
+              file=sys.stderr)
+        return EXIT_INCOMPLETE
+    finally:
+        # **Flush through the wrapper, before handing the stream back.** A
+        # report short enough to sit in the buffer is not written until the
+        # interpreter flushes on its way out -- by which point this wrapper is
+        # gone and the failure lands where no `except` can reach it. Draining
+        # it here is what makes the short-report path survivable at all.
+        stdout.flush()
+        sys.stdout = stdout._stream
 
 
 if __name__ == "__main__":

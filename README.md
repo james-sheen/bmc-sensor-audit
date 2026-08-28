@@ -32,8 +32,10 @@ downstream fleet layer. That layer defines a different namespace and refuses to
 downgrade to this one, so nothing anywhere defined it and no converter existed —
 two documents describing a seam neither had built. It is specified here now, and
 `fleet-sensor-baseline baseline --for-referee` produces it. The README's test
-count also gained the qualifier it was missing: 693 collected with PyYAML and 673
-without, both pinned by a check that measures each population instead of one.
+count also gained the qualifier it was missing: the two populations, with PyYAML
+and without, are stated separately in the table below and each is pinned by a
+check that measures it. The numbers live there and nowhere else, because a count
+written in two places drifts in one of them.
 
 **0.2.0 is a compatibility break, and small.** One refusal is new: `--insecure`
 beside `--pin-sha256` or `--cafile` is now rejected instead of silently winning,
@@ -123,7 +125,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **693** collected with PyYAML installed, **673** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **708** collected with PyYAML installed, **688** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -323,6 +325,11 @@ asking someone to enumerate them invites them to miss one.
 run could not be completed. The third is distinct on purpose — a pipeline that
 reads "could not reach the BMC" as "sensors are missing" will fail a good
 firmware image, and it only has to do that once before nobody trusts the gate.
+
+**A reader that stops reading does not change the code.** `coverage ... | head`
+returns the verdict the run computed: the report is rendered before it is
+printed, so the answer already exists by the time the pipe closes. A closed pipe
+is not a fourth exit code, and not an incomplete audit.
 
 "Could not be completed" includes a configuration file that could not be read,
 and it includes the case where the rest of the directory read fine. The sensors
