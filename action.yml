@@ -100,9 +100,22 @@ runs:
         # tool shipped one, whether or not anything a consumer wrote had to
         # change, and a number that increments for invisible reasons stops
         # carrying information.
+        #
+        # It said `>=0.1,<0.2` for three tool releases after 0.2.0 shipped, so
+        # everyone who adopted this action ran 0.1.5 while the repository built
+        # 0.2.2. Widening only happens when somebody does it, and nothing here
+        # asked; `tests/test_action.py` now fails when this range cannot install
+        # the version this repository is currently building.
+        #
+        # The floor is 0.2.2 and not 0.2.0, for a reason reachable from these
+        # inputs: before it, a BMC that answered with a certificate this run
+        # would not accept was reported as unreachable, which sends an operator
+        # to the network to look for a machine that is right there. `target`
+        # without `insecure` is the ordinary way to meet that, and `insecure`
+        # exists in this file because BMCs ship self-signed certificates.
         case "$BSA_MODE" in
-          detect)   spec='bmc-sensor-audit[detect]>=0.1,<0.2' ;;
-          coverage) spec='bmc-sensor-audit>=0.1,<0.2' ;;
+          detect)   spec='bmc-sensor-audit[detect]>=0.2.2,<0.3' ;;
+          coverage) spec='bmc-sensor-audit>=0.2.2,<0.3' ;;
           *) echo "::error::mode must be detect or coverage, not '$BSA_MODE'"; exit 2 ;;
         esac
         python3 -m pip install --quiet --upgrade pip

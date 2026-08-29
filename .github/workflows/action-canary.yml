@@ -4,10 +4,10 @@
 # `@action-v0`, which is what consumers actually get, and the two can differ in ways
 # nothing else here would notice.
 #
-# The seam it watches is a RANGE. `action.yml` pins the tool as
-# `bmc-sensor-audit>=0.1,<0.2`, so any 0.1.x release lands in every consumer's
-# pipeline without this repository changing at all and without anybody choosing
-# it. That is the same argument as the engine canary one level up: the engine
+# The seam it watches is a RANGE. `action.yml` pins the tool as a range, so any
+# release inside it lands in every consumer's pipeline without this repository
+# changing at all and without anybody choosing it. The range is not restated
+# here: it was, and the copy went stale next to the original. That is the same argument as the engine canary one level up: the engine
 # canary asks whether a permitted `arbiter-engine` release moved something, and
 # this asks whether a permitted `bmc-sensor-audit` release moved something for
 # the people who adopted us through five lines of YAML.

@@ -22,12 +22,17 @@ field. This asserts the shape that does not.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
 yaml = pytest.importorskip("yaml", reason="action.yml is YAML; CI installs PyYAML")
+
+from packaging.requirements import Requirement  # noqa: E402
+
+from bmc_sensor_audit import __version__  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTION = ROOT / "action.yml"
@@ -36,6 +41,11 @@ README = ROOT / "README.md"
 ACTION_SPEC = yaml.safe_load(ACTION.read_text())
 AUDIT_SCRIPT = next(s for s in ACTION_SPEC["runs"]["steps"]
                     if s.get("id") == "audit")["run"]
+#: The install step has no `id`; it is named. Kept separate from the audit
+#: script because what it decides -- which tool version a consumer gets --
+#: is a different question from the argv the audit step builds.
+INSTALL_SCRIPT = next(s for s in ACTION_SPEC["runs"]["steps"]
+                      if s.get("name") == "Install the pinned tool")["run"]
 
 BASE = {"BSA_MODE": "detect", "BSA_CONFIG": "configs/", "BSA_WALK": "",
         "BSA_TARGET": "", "BSA_USERNAME": "", "BSA_PASSWORD": "",
@@ -232,3 +242,68 @@ class TestTheReadmeDescribesTheActionThatExists:
         readme = README.read_text()
         for output in ACTION_SPEC["outputs"]:
             assert output in readme, f"action.yml declares {output!r}; the README never names it"
+
+
+class TestTheActionCanInstallTheToolThisRepositoryBuilds:
+    """The pin excluded three releases of the tool shipped from this tree.
+
+    `action.yml` said `>=0.1,<0.2` from the day it was written, which was
+    correct then. 0.2.0 shipped on 2026-08-26 and the range did not move, so
+    `@action-v0` went on resolving 0.1.5 while this repository built 0.2.2 --
+    for three releases, at the one surface a stranger adopts us through.
+
+    Four places restate that range and none derived it, so nothing could go
+    red. The action canary could not: it watches whether a PERMITTED release
+    moved something, and this was a release the range forbade. The question it
+    was never asked is the one below -- **can this action install the version
+    this repository is currently building?**
+
+    Deliberately the CEILING and not the floor. Asserting the floor tracks the
+    newest release would force this pin to move on every tool release and make
+    the widening automatic, which is the opposite of what the file argues: the
+    range widens when somebody decides a release is compatible. This fails only
+    when the tool has moved somewhere the action cannot follow.
+    """
+
+    SPECS = re.findall(r"spec='([^']+)'", INSTALL_SCRIPT)
+
+    def test_both_specs_were_found(self):
+        """The checks below iterate a regex result, and an empty list iterates
+        cleanly. If the case statement is reshaped, this says so."""
+        assert len(self.SPECS) == 2, (
+            f"expected the detect and coverage specs, found {self.SPECS!r}")
+
+    @pytest.mark.parametrize("raw", SPECS)
+    def test_the_spec_admits_the_version_in_this_tree(self, raw):
+        req = Requirement(raw)
+        assert req.name == "bmc-sensor-audit", raw
+        assert req.specifier.contains(__version__), (
+            f"action.yml installs {raw!r}, which cannot resolve to "
+            f"{__version__} -- the version this repository builds. A consumer "
+            f"writing `uses: ...@action-v0` would get an older tool than the "
+            f"one released here, and would not be told")
+
+    def test_that_check_could_have_failed(self):
+        """The assertion above is only worth having if the range it rejects is
+        the range that shipped. This is the literal that was in the file."""
+        assert not Requirement("bmc-sensor-audit[detect]>=0.1,<0.2").specifier.contains(
+            __version__), (
+            f"{__version__} falls inside the range this test exists to reject, "
+            f"so the assertion above cannot fail and proves nothing")
+
+    def test_the_modes_differ_only_in_the_engine_extra(self):
+        detect, coverage = (Requirement(s) for s in self.SPECS)
+        assert detect.extras == {"detect"}, detect.extras
+        assert coverage.extras == set(), coverage.extras
+        assert detect.specifier == coverage.specifier, (
+            "the two modes install different RANGES of the same tool, so a "
+            "consumer's tool version depends on which mode they picked")
+
+    def test_the_readme_quotes_the_range_the_action_uses(self):
+        """A table cell is a copy, and this is the copy that went stale beside
+        the original. It is not derived -- a reader needs to see the range --
+        so it is held against the file instead."""
+        coverage = next(s for s in self.SPECS if "[" not in s)
+        assert coverage in README.read_text(), (
+            f"action.yml installs {coverage!r}; the README's tag table names "
+            f"something else, and a reader believes the README")
