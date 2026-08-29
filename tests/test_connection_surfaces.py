@@ -348,11 +348,17 @@ class TestTheToolCanBeAskedWhatItIs:
     """`--version`, and the reason it is not cosmetic.
 
     Every consumer in this family runs this tool as a **subprocess resolved on
-    PATH**, never as an import. `fleet-sensor-baseline` declares
-    `bmc-sensor-audit>=0.1.5,<0.2`; pip enforces that over the environment it
-    installed into, and then the collector runs whatever `PATH` hands it. A
-    system-wide install, a pipx shim, or simply a different venv earlier on PATH
-    silently answers instead, and the floor is never consulted.
+    PATH**, never as an import. `fleet-sensor-baseline` declares a floor on this
+    tool; pip enforces that over the environment it installed into, and then the
+    collector runs whatever `PATH` hands it. A system-wide install, a pipx shim,
+    or simply a different venv earlier on PATH silently answers instead, and the
+    floor is never consulted.
+
+    The floor is deliberately NOT quoted here. It was -- as
+    `>=0.1.5,<0.2` -- and that consumer has since raised it, so this paragraph
+    spent a release describing a declaration that had moved. A range has one
+    home, which is the declaring package's own metadata, and a copy in another
+    repository's prose cannot be checked by anything either repository runs.
 
     Until this flag existed there was no way to close that: `--version` exited 2
     with an argparse usage error, so a downstream floor could be declared and
