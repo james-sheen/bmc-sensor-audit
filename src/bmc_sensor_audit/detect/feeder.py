@@ -92,6 +92,38 @@ _NOT_APPLICABLE_REASONS = frozenset({"not_applicable", "undefined_for_values"})
 # `--strict` on the day the pin moved, for a case this build has understood
 # since 0.1.8. Reported from outside, measured here before believing it.
 
+# A check that was declared and never made answerable: the model states the
+# axiom and supplies no number for it to compare against.
+#
+# WHY THIS IS NOT A MODEL DEFECT, EVEN THOUGH THIS PACKAGE WRITES THE MODEL.
+# The generator already withholds BOUNDEDNESS from a sensor whose BMC declares no
+# thresholds, precisely so the engine is never asked a question nobody set. It
+# cannot do the same for MONOTONICITY: declaring the axiom gets the reversal arm
+# AND the rate arm, and there is no way to declare one without the other. So a
+# counter arrives with a rate arm nobody bounded, and this package cannot bound
+# it -- power-on hours climb at one per 3600 s and a correctable-ECC count has no
+# published rate at all. That number is an operator-knowledge fact, which is the
+# wall the supplemental declarations channel exists for and where this belongs
+# in the long run.
+#
+# WHY NOT FOLDED INTO THE SET ABOVE. `_NOT_APPLICABLE_REASONS` means *the
+# question is meaningless against the values that arrived*. This one means
+# *nobody supplied the number*. Same bucket by decision, different fact -- and
+# lumping them would make that set's own comment false, which is the exact drift
+# this file keeps catching in itself.
+#
+# CLASSIFIED AHEAD OF THE RELEASE, the same way `undefined_for_values` was, and
+# for a measured reason rather than a cautious one. An unreleased engine build
+# makes MONOTONICITY's rate arm decline `no_threshold` when no rate is declared;
+# before this line, that reason was in none of the five sets here, so it fell to
+# `unclassified_declines` and `--strict` went from 0 to 1 on every healthy BMC
+# carrying a counter. Measured by calling `evaluate` with that envelope, not
+# inferred from reading the engine.
+#
+# `--strict` STILL FAILS on it, and should: a check that was never made
+# answerable is not established, and strict is the mode that says so.
+_NO_THRESHOLD_REASONS = frozenset({"no_threshold"})
+
 # Declines that say the MODEL is wrong rather than the data. This package
 # GENERATES the model, so a declaration the engine cannot run is this package's
 # defect and must fail: nothing else will notice it.
@@ -355,7 +387,9 @@ def evaluate(envelope: dict, describe: dict, manifest: Manifest, *,
             # This package wrote the model. A declaration the engine cannot run
             # is ours, and it fails for the same reason a wrong mapping does.
             outcome.core_case_declines.append(rendered)
-        elif reason in _NOT_APPLICABLE_REASONS or reason in _PRECONDITION_REASONS:
+        elif (reason in _NOT_APPLICABLE_REASONS
+                or reason in _PRECONDITION_REASONS
+                or reason in _NO_THRESHOLD_REASONS):
             outcome.inapplicable_declines.append(rendered)
         else:
             # Not silently bucketed. A closed vocabulary with a missing member

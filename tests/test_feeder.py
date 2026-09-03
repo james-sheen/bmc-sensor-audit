@@ -441,7 +441,7 @@ class TestTheDeclineVocabularyIsClassifiedAheadOfTheEngine:
                         feed_result=FeedResult(), **kw)
 
     @pytest.mark.parametrize("reason", ["not_applicable", "undefined_for_values",
-                                        "precondition_unmet"])
+                                        "precondition_unmet", "no_threshold"])
     def test_a_question_meaningless_on_these_values_does_not_fail_the_gate(self, reason):
         outcome = self._outcome(reason)
         assert outcome.inapplicable_declines, reason
@@ -468,5 +468,42 @@ class TestTheDeclineVocabularyIsClassifiedAheadOfTheEngine:
         """The buckets differ on the default exit and not under --strict. Pinned so
         widening the vocabulary cannot quietly soften the strict contract."""
         for reason in ("undefined_for_values", "precondition_unmet",
-                       "a_reason_no_build_emits"):
+                       "no_threshold", "a_reason_no_build_emits"):
             assert self._outcome(reason, strict_declines=True).exit_code == 1, reason
+
+    def test_a_check_nobody_bounded_does_not_fail_the_default_gate(self):
+        """`no_threshold`, classified before the engine release that emits it.
+
+        An unreleased engine build makes MONOTONICITY's rate arm decline when
+        no rate is declared. This package emits MONOTONICITY for every counter
+        sensor and cannot supply a rate -- power-on hours climb at one per
+        3600 s and a correctable-ECC count has no published rate at all, and
+        declaring the axiom gets both arms with no way to take one. So every
+        counter on every healthy BMC produces one of these.
+
+        MEASURED before this line existed: it fell to `unclassified_declines`
+        and `--strict` went from 0 to 1 on every such board. Nothing in the
+        engine's own suite could see that; only calling `evaluate` could."""
+        outcome = self._outcome("no_threshold")
+        assert outcome.inapplicable_declines
+        assert not outcome.unclassified_declines
+        assert not outcome.core_case_declines, (
+            "a check nobody bounded is not the same as a declaration the engine "
+            "cannot run; folding it into the model-defect bucket would fail "
+            "every healthy board")
+        assert outcome.exit_code == 0
+
+    def test_it_is_its_own_set_rather_than_widening_an_older_one(self):
+        """The two sets share a bucket and do not share a meaning.
+
+        `_NOT_APPLICABLE_REASONS` means *the question is meaningless against the
+        values that arrived*; this means *nobody supplied the number*. Widening
+        the older set would have made its own comment false, which is the drift
+        this file keeps catching in itself."""
+        from bmc_sensor_audit.detect import feeder
+        assert "no_threshold" not in feeder._NOT_APPLICABLE_REASONS
+        assert "no_threshold" in feeder._NO_THRESHOLD_REASONS
+        assert not (feeder._NO_THRESHOLD_REASONS
+                    & feeder._NOT_APPLICABLE_REASONS)
+        assert not (feeder._NO_THRESHOLD_REASONS
+                    & feeder._MODEL_DEFECT_REASONS)
