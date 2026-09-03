@@ -160,6 +160,15 @@ class TestTheMessageSurfaceExists:
         assert module.scan_text(text, "(message)", module.RULES) == []
 
 
+NEEDS_GIT = pytest.mark.skipif(
+    not (ROOT / ".git").exists(),
+    reason="runs .githooks/commit-msg, which needs a git repository; absent when "
+           "running from an sdist. Skipped with a reason rather than failed -- "
+           "`fatal: not a git repository` is a fact about the checkout, not "
+           "about the hook.")
+
+
+@NEEDS_GIT
 class TestTheHookRunsWhatItSaysItRuns:
     """The hook's comment claimed it ran the hygiene rules and it did not.
 

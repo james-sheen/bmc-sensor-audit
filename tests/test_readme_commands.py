@@ -24,6 +24,8 @@ import os
 import re
 import json
 import shutil
+import importlib.metadata
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -122,12 +124,50 @@ def test_the_documented_invocation_runs_from_a_directory_with_no_checkout(tmp_pa
     assert "sensors declared" in result.stdout
 
 
+def _installed_as_a_distribution() -> bool:
+    """Whether pip put this package in the environment, as opposed to pytest
+    putting `src/` on `sys.path` via `pythonpath` in `pyproject.toml`.
+
+    THE PREDICATE IS THE WHOLE DIFFICULTY and the first one was wrong. It asked
+    whether `src/` was absent, which is true of an installed wheel and FALSE of
+    an unpacked sdist -- and the sdist is the artifact somebody actually runs.
+    So the skip did not fire there and the test failed for exactly the reason it
+    had just been taught to skip for. Measured, not reasoned: 705 passed, this
+    one red, from a venv holding the sdist.
+
+    Asking *can a bare command import it* would be asking the assertion, and a
+    skip computed from the assertion never fires when it matters. Distribution
+    metadata is a fact about the environment and is decided before the
+    subprocess runs.
+    """
+    try:
+        importlib.metadata.version("bmc-sensor-audit")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(
+    _installed_as_a_distribution(),
+    reason="the package is installed in this environment, so a bare command "
+           "correctly succeeds and this negative cannot hold. Skipped with a "
+           "reason rather than failed: the claim is about a checkout where the "
+           "only copy is the one in the tree, and it says nothing about the "
+           "README when there is a second copy on the path.")
 def test_the_bare_command_without_pythonpath_still_fails(tmp_path):
     """The paired negative, and the reason the line above is not decoration.
 
     Without this, the test above passes just as well if the package were
     importable for some unrelated reason, and the README could quietly go back
     to printing a command that does not run.
+
+    SCOPED 2026-09-02: the claim is *without `pythonpath`, from a checkout*. An
+    installed package makes it false by design, which is a different world and
+    not a regression -- reported from outside after running this suite from the
+    sdist, where it fails for a reason that says nothing about the README.
+
+    The first scoping was wrong and is recorded in `_installed_as_a_distribution`
+    above: it keyed on the absence of `src/`, which an sdist ships.
     """
     result = subprocess.run(
         [sys.executable, "-m", "bmc_sensor_audit.cli", "--help"],

@@ -416,3 +416,57 @@ class TestTheEnvelopeSchemaVersionIsChecked:
         session.add_entity("e", "S", properties={"reading": 5.0})
         envelope = check(session).to_dict()
         assert envelope["meta"]["schema_version"] == ENVELOPE_SCHEMA_VERSION
+
+class TestTheDeclineVocabularyIsClassifiedAheadOfTheEngine:
+    """Every reason the pinned engine RANGE can emit has a bucket here.
+
+    The pin is `>=0.1.8,<0.2`, so a release inside it may add members to a closed
+    enum -- the engine's own compatibility document says a patch may, and says a
+    reader must treat the enum as three-valued. An unknown member lands in
+    `unclassified_declines`, which is correct and is also a `--strict` failure on
+    the day the pin moves, for cases this package has understood since 0.1.8.
+
+    Classified BEFORE that release rather than after it. Measured on one model
+    against both builds: a declared flow on a rail reading zero watts in declines
+    `not_applicable` on 0.1.9 and `undefined_for_values` on the next build, with
+    findings empty in both. Same fact, new name.
+    """
+
+    def _outcome(self, reason, **kw):
+        from bmc_sensor_audit.detect.feeder import evaluate, FeedResult, Manifest
+        envelope = {"findings": [], "not_checked": [
+            {"entity_id": "r1", "entity_type": "Rail", "indicator": "pin_w",
+             "axiom": "CONSERVATION", "reason": reason, "detail": "zero total"}]}
+        return evaluate(envelope, {}, Manifest(domain_id="bmc"),
+                        feed_result=FeedResult(), **kw)
+
+    @pytest.mark.parametrize("reason", ["not_applicable", "undefined_for_values",
+                                        "precondition_unmet"])
+    def test_a_question_meaningless_on_these_values_does_not_fail_the_gate(self, reason):
+        outcome = self._outcome(reason)
+        assert outcome.inapplicable_declines, reason
+        assert not outcome.unclassified_declines, reason
+        assert outcome.exit_code == 0
+
+    def test_a_model_defect_fails_because_this_package_wrote_the_model(self):
+        """`missing_role` means a declaration the engine cannot run. The generator
+        emitted it, so nothing else will notice it."""
+        outcome = self._outcome("missing_role")
+        assert outcome.core_case_declines
+        assert outcome.exit_code == 1
+
+    def test_an_unknown_member_still_overflows_by_name(self):
+        """The control, and the one that matters most. Widening a closed set is
+        only safe while the overflow still works -- otherwise the next member the
+        engine adds is silently absorbed into whichever bucket sits nearest."""
+        outcome = self._outcome("a_reason_no_build_emits")
+        assert outcome.unclassified_declines
+        assert not outcome.inapplicable_declines
+        assert not outcome.core_case_declines
+
+    def test_strict_still_fails_on_every_decline_bucket(self):
+        """The buckets differ on the default exit and not under --strict. Pinned so
+        widening the vocabulary cannot quietly soften the strict contract."""
+        for reason in ("undefined_for_values", "precondition_unmet",
+                       "a_reason_no_build_emits"):
+            assert self._outcome(reason, strict_declines=True).exit_code == 1, reason

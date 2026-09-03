@@ -76,7 +76,42 @@ _DATA_SUFFICIENCY_REASONS = frozenset({"insufficient_samples"})
 # -- and it printed *declines this build does not recognise*, which was true on the
 # day it was written and stopped being true the moment somebody measured it. A
 # vocabulary is only derived while somebody keeps deriving it.
-_NOT_APPLICABLE_REASONS = frozenset({"not_applicable"})
+_NOT_APPLICABLE_REASONS = frozenset({"not_applicable", "undefined_for_values"})
+
+# `undefined_for_values` joined the set above on 2026-09-02, BEFORE the engine
+# release that emits it, and it is the same fact under a new name rather than a
+# new fact. Measured against both engines on one model -- a declared power flow
+# on a rail reading zero watts in: the pinned build declines `not_applicable`,
+# the next one declines `undefined_for_values`, findings empty in both. The
+# engine split a reason that was three answers under one name; this is the arm
+# that means *the quantity has no value on these values*, which is what the
+# paragraph above already describes.
+#
+# Classified ahead of the release on purpose. An unknown member lands in
+# `unclassified_declines`, which is the correct behaviour and would have failed
+# `--strict` on the day the pin moved, for a case this build has understood
+# since 0.1.8. Reported from outside, measured here before believing it.
+
+# Declines that say the MODEL is wrong rather than the data. This package
+# GENERATES the model, so a declaration the engine cannot run is this package's
+# defect and must fail: nothing else will notice it.
+#
+# Kept out of `_CORE_CASE_REASONS` deliberately -- that set is subject to the
+# expected-peer exemption below, which is a statement about a sensor that is not
+# reading. A model defect has no peer to be excused by.
+_MODEL_DEFECT_REASONS = frozenset({"missing_role"})
+
+# A check gated on a property the entity must carry, where the entity did not
+# carry it. The engine declines rather than passing, and says in as many words
+# that it cannot tell a deliberate exemption from a mistyped name -- so this is
+# routed to a human, not to a verdict.
+#
+# UNREACHABLE FROM THIS PACKAGE TODAY, and classified anyway: the generator emits
+# no CONNECTIVITY statement and no `required_property`, so nothing here can
+# produce it. Left in the inapplicable bucket rather than a failing one, because
+# arriving would mean a supplemental file declared a gate, and the operator who
+# wrote it is the one who knows whether the exemption was meant.
+_PRECONDITION_REASONS = frozenset({"precondition_unmet"})
 
 
 @dataclass
@@ -316,7 +351,11 @@ def evaluate(envelope: dict, describe: dict, manifest: Manifest, *,
             outcome.core_case_declines.append(rendered)
         elif reason in _DATA_SUFFICIENCY_REASONS:
             outcome.data_declines.append(rendered)
-        elif reason in _NOT_APPLICABLE_REASONS:
+        elif reason in _MODEL_DEFECT_REASONS:
+            # This package wrote the model. A declaration the engine cannot run
+            # is ours, and it fails for the same reason a wrong mapping does.
+            outcome.core_case_declines.append(rendered)
+        elif reason in _NOT_APPLICABLE_REASONS or reason in _PRECONDITION_REASONS:
             outcome.inapplicable_declines.append(rendered)
         else:
             # Not silently bucketed. A closed vocabulary with a missing member

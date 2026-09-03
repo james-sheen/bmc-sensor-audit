@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import math
+import os
 import pathlib
 import re
 import tempfile
@@ -69,12 +70,42 @@ def _require_the_pinned_engine() -> None:
     def parts(version: str) -> tuple[int, ...]:
         return tuple(int(piece) for piece in version.split("."))
 
+    # A pre-release may be verified through this door, and only when the caller
+    # NAMES the one they mean.
+    #
+    # WHY THE OPT-IN NAMES A VERSION rather than being a boolean. The engine
+    # started labelling its master branch `0.1.10.dev0` so a source install stops
+    # claiming to be the release before it -- correct, and it made every case in
+    # this module error at setup, because the pin scheme is plain X.Y.Z and a
+    # pre-release is outside it by construction. That is right for an operator
+    # and wrong for anyone verifying the next engine against this consumer before
+    # it ships: the front door closed on exactly the check worth doing.
+    #
+    # A boolean would reopen it too far. Left set, it would accept whatever
+    # pre-release happened to be installed months later, which is the silence
+    # this guard exists to end. Naming the version means the opt-in expires by
+    # itself: the next pre-release does not match and the door shuts again.
+    #
+    # Reported from outside 2026-09-02, having cost that session its consumer lane.
+    named = os.environ.get("BSA_VERIFY_ENGINE_PRERELEASE", "").strip()
+    prerelease_admitted = bool(named) and named == installed
+
+    release_part = re.match(r"^([0-9]+(?:\.[0-9]+)*)", installed)
+    comparable = release_part.group(1) if (prerelease_admitted and release_part) else installed
+
     try:
-        outside = not parts(floor) <= parts(installed) < parts(ceiling)
+        outside = not parts(floor) <= parts(comparable) < parts(ceiling)
     except ValueError:
-        # A pre-release or local version. The pin scheme is plain X.Y.Z, so anything
-        # else is outside it by construction rather than by comparison.
+        # A pre-release or local version that was not named. The pin scheme is
+        # plain X.Y.Z, so anything else is outside it by construction rather than
+        # by comparison.
         outside = True
+    if outside and prerelease_admitted:
+        pytest.fail(
+            f"arbiter-engine {installed} was admitted by "
+            f"BSA_VERIFY_ENGINE_PRERELEASE, and its release part {comparable} is "
+            f"still outside >={floor},<{ceiling}. Naming a pre-release opts into "
+            f"verifying it, not into ignoring the pin", pytrace=False)
     if outside:
         pytest.fail(
             f"arbiter-engine {installed} is installed but this project pins "
@@ -954,9 +985,16 @@ class TestTheZeroInputDeclineArrivedInsideThePin:
     **This is the canary doing its job, and it took a measurement to find.** The pin
     is a RANGE. A declared flow whose total input is at or below zero produced an
     empty problem list on the engine this module was written against, and declines
-    `not_applicable` now -- real on any idle or powered-off rail, and it arrived as
-    a reason the feeder had no member for, printing *declines this build does not
-    recognise*.
+    now -- real on any idle or powered-off rail, and it arrived as a reason the
+    feeder had no member for, printing *declines this build does not recognise*.
+
+    **THE REASON'S NAME MOVES INSIDE THE RANGE; THE CLASSIFICATION DOES NOT.** It is
+    `not_applicable` up to 0.1.9 and `undefined_for_values` after, because the engine
+    split a reason that was three answers under one name. Measured on one model
+    against both builds. The assertions below name the BUCKET rather than the
+    reason for exactly this: a test that pinned the spelling would go red on a
+    rename that changed nothing about the answer, and this class exists to catch
+    the engine moving, not to object to it moving.
 
     Nothing broke: an unclassified decline is reported prominently and only fails
     the gate under `--strict-declines`, which is the whole point of the third

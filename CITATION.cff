@@ -18,8 +18,8 @@ authors:
 # Quoted deliberately. CFF 1.2.0 types both of these as strings, and an unquoted
 # date deserialises to a date object in most YAML parsers -- which validates
 # locally and fails the schema.
-version: "0.2.2"
-date-released: "2026-08-28"
+version: "0.2.3"
+date-released: "2026-09-03"
 license: Apache-2.0
 repository-code: "https://github.com/james-sheen/bmc-sensor-audit"
 url: "https://github.com/james-sheen/bmc-sensor-audit"

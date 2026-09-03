@@ -38,6 +38,7 @@ def built():
     return declaration, model, manifest
 
 
+
 class TestNothingVanishes:
     def test_every_declaration_is_either_generated_or_excluded(self, built):
         """The completeness pin. Every declared sensor must be accounted for on
@@ -399,6 +400,15 @@ class TestGeneratedOutputIsSubjectToTheHygieneRules:
         assert [h[2].name for h in hits] == ["redfish_inventory_field"]
 
 
+NEEDS_SRC = pytest.mark.skipif(
+    not (ROOT / "src" / "bmc_sensor_audit").is_dir(),
+    reason="reads the package SOURCE; absent when running from an sdist or an "
+           "installed package. Skipped with a reason rather than failed: a red "
+           "here would say the generator is wrong when the tree is simply not "
+           "the repository.")
+
+
+@NEEDS_SRC
 class TestTheRetiredMechanismLeavesOnlyItsExplanation:
     """A negative claim that was false because of the sentence making it.
 
