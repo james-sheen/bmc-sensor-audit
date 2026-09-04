@@ -83,12 +83,18 @@ def check(text: str) -> tuple[list[str], list[str]]:
     for number, line in enumerate(lines, start=1):
         if hygiene_check.EXEMPT.search(line):
             continue
-        for rule in hygiene_check.active_rules(REPO_ROOT):
-            found = rule.pattern.search(line)
-            if found:
-                refusals.append(
-                    f"line {number} carries {rule.why.split('.')[0]} "
-                    f"({len(found.group(0))} characters; not shown)")
+        # Through `hygiene_check._matches_in`, never `rule.pattern` directly.
+        # This was the THIRD copy of that loop -- the file scan and the message
+        # scan were the other two -- and it was the one that kept its own
+        # behaviour when the others learned that some addresses are meant to be
+        # published. It then refused every commit carrying a `Co-Authored-By`
+        # trailer, in four repositories at once, while the very same rules
+        # accepted the same line one function away.
+        for rule, text in hygiene_check._matches_in(
+                line, hygiene_check.active_rules(REPO_ROOT)):
+            refusals.append(
+                f"line {number} carries {rule.why.split('.')[0]} "
+                f"({len(text)} characters; not shown)")
 
     for number, line in enumerate(lines, start=1):
         if BASIS.search(line):

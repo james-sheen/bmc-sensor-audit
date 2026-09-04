@@ -47,10 +47,20 @@ PLANTS = {
     "mac_address": 'MAC = "de:ad:be:ef:00:11"',  # hygiene: synthetic
     "redfish_inventory_field": '{"SerialNumber": "CN7082019L003A"}',  # hygiene: synthetic
     "repository_nickname": "pinned against the checker in repo #1",  # hygiene: synthetic
+    "personal_email": 'CONTACT = "a.person@somewhere.co.uk"',  # hygiene: synthetic
 }
 
 # Things that resemble a hazard and are not one. Each is present in real trees.
 NEAR_MISSES = [
+    # Publishable addresses. If these were hits, the rule would refuse the exact
+    # form it exists to steer people towards -- and the `Co-Authored-By` trailer
+    # this project puts in every message would fail every commit.
+    'j <someone@users.noreply.github.com>',  # hygiene: synthetic
+    'Co-Authored-By: X <noreply@anthropic.com>',  # hygiene: synthetic
+    'user.email = "t@example.com"',          # hygiene: synthetic
+    # Redfish annotations. Not addresses, and both are in this repo's fixtures.
+    '"Members@odata.count": 2',
+    '"Reading@Redfish.AllowableValues": []',
     'BASE = "http://127.0.0.1:8000"',        # the mock BMC binds loopback every run
     'DNS = "8.8.8.8"',                       # public address
     'HOST = "172.15.0.1"',                   # just outside RFC1918

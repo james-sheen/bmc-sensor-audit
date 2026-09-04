@@ -35,6 +35,29 @@ python3 "$ROOT/tools/hygiene_check.py"
 # flag also switches off the hygiene sweep above, so a check nobody can satisfy
 # costs more than the one it was added to provide.
 #
+# The identity this commit will carry.
+#
+# A commit's AUTHOR is neither its message nor a file in it, so no text scanner
+# reaches it -- the hygiene rules ran over both surfaces and a personal address
+# still reached 24 published commits, because a local `user.email` quietly beat
+# the global one and nothing read it. Checked here, before the commit exists,
+# because after it is pushed a force-push changes the SHAs and removes nothing:
+# the old objects stay fetchable and the address stays published.
+AUTHOR_EMAIL=$(git config user.email || true)
+case "$AUTHOR_EMAIL" in
+    *@users.noreply.github.com|*@noreply.github.com) ;;
+    "")
+        echo "pre-commit: no user.email is set, so this commit would carry a guess." >&2
+        exit 1 ;;
+    *)
+        echo "pre-commit: user.email is a real address, and a commit publishes it." >&2
+        echo "            Set the GitHub noreply address for this repository:" >&2
+        echo "              git config user.email <you>@users.noreply.github.com" >&2
+        echo "            A local setting beats the global one; that is how this" >&2
+        echo "            reached 24 published commits before anyone looked." >&2
+        exit 1 ;;
+esac
+
 # A missing pytest fails rather than skips. A gate that converts its own red into a
 # skip removes the failure and the evidence together.
 if ! python3 -c "import pytest" 2>/dev/null; then
@@ -43,6 +66,17 @@ if ! python3 -c "import pytest" 2>/dev/null; then
     exit 1
 fi
 
-exec python3 -m pytest \
-    "$ROOT/tests/test_readme_commands.py::TestTheReadmeTestCount" \
-    -q -p no:cacheprovider
+# The README-count check, where a repository has one.
+#
+# This step used to name `tests/test_readme_commands.py` outright. That file is
+# this repository's; the same hook copied into four others refused EVERY commit,
+# because pytest exits non-zero when it collects nothing and the hook could not
+# tell "no such test" from "the test failed". The hooks are meant to be one file
+# across the repositories, so the step has to find its target by SHAPE rather
+# than be told a name that is only true here.
+README_TESTS=$(ls "$ROOT"/tests/test_readme*.py 2>/dev/null || true)
+if [ -z "$README_TESTS" ]; then
+    exit 0
+fi
+
+exec python3 -m pytest $README_TESTS -q -p no:cacheprovider

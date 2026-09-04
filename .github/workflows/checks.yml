@@ -98,6 +98,32 @@ jobs:
           done
           exit $FAILED
 
+      - name: Authorship
+        # A commit's author is neither its message nor a file in it, so neither
+        # check above can see it. A local `user.email` quietly beat the global
+        # one and a personal address reached 24 published commits. The hook
+        # checks the setting before the commit; this checks the RESULT after it,
+        # which is the thing that actually gets published.
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha || github.event.before || '' }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            LIST=$(git rev-parse HEAD)
+          else
+            LIST=$(git rev-list "$BASE..${{ github.sha }}")
+          fi
+          FAILED=0
+          for SHA in $LIST; do
+            for WHO in $(git log -1 --format='%ae%n%ce' "$SHA"); do
+              case "$WHO" in
+                *@users.noreply.github.com|*@noreply.github.com) ;;
+                *) echo "::error::$SHA carries a real address in its authorship"; FAILED=1 ;;
+              esac
+            done
+          done
+          exit $FAILED
+
       - name: Tests
         # The PACKAGE is not pip-installed first, deliberately. One test asserts that
         # a bare `python3 -m bmc_sensor_audit.cli` FAILS without PYTHONPATH, and an
