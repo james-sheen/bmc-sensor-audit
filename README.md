@@ -21,10 +21,20 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.2.4**, tagged `v0.2.4`, Apache-2.0, on PyPI as
+**Released — 0.2.5**, tagged `v0.2.5`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.2.5 separates the machinery from the domain.** The presence diff, the
+regression gate, the report and the engine feed are typed on protocols rather
+than on this domain's classes, and everything that names a sensor — the
+taxonomy, the field rules, the peer grouping, the name templates — is supplied
+by a vertical registered through an entry point. Nothing a caller runs changes.
+What changes is that the same core now runs a domain this package was not
+written for: a factory-line vocabulary and a factory-line capture shape drive
+the same three-valued diff through the protocols alone, which is the measurement
+the split exists to produce rather than an argument that it worked.
 
 **0.2.2 keeps the verdict when the reader stops reading.** A report piped into
 `head` used to lose its exit code — a long one exited `1`, which means findings
@@ -589,7 +599,7 @@ which is how a repository ends up unable to release its own 1.0.
 
 | Tag | Versions | Installs |
 |---|---|---|
-| `v0.2.4` | the tool, on PyPI | — |
+| `v0.2.5` | the tool, on PyPI | — |
 | `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.2.2,<0.3`, with the `[detect]` extra when `mode: detect` |
 
 **`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the
