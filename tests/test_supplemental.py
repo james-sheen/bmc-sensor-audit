@@ -24,8 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(ROOT / "src"))
 
+from bmc_sensor_audit.verticals.peer_groups import pairing_candidates
 from bmc_sensor_audit.detect.generator import (  # noqa: E402
-    generate, pairing_candidates, peer_property)
+    generate, peer_property)
 from bmc_sensor_audit.detect.supplemental import (  # noqa: E402
     FORMAT, SupplementalError, load_supplemental, unmatched_names)
 from bmc_sensor_audit.inventory.entity_manager import load_declaration  # noqa: E402

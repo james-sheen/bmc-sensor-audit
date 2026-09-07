@@ -142,6 +142,17 @@ class Walk:
     fields_observed: bool = False
 
     @property
+    def points(self):
+        """The capture protocol's name for `sensors`.
+
+        The neutral machinery says *points* because one domain's sensors are
+        another's tags. This is the vertical conforming to that, rather than an
+        adapter object wrapping it: the type already carried every other member
+        the protocol asks for.
+        """
+        return self.sensors
+
+    @property
     def complete(self) -> bool:
         """False if any fetch failed. A diff against an incomplete walk cannot
         distinguish an absent sensor from an unread subtree."""

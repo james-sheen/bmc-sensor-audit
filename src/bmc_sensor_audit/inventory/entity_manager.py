@@ -180,6 +180,11 @@ class DeclaredSensor:
         return (self.name, self.label)
 
     @property
+    def disabled(self) -> bool:
+        """The declaration protocol's name for `disabled_in_config`."""
+        return self.disabled_in_config
+
+    @property
     def display_name(self) -> str:
         return f"{self.name}:{self.label}" if self.label else self.name
 
@@ -232,6 +237,11 @@ class Declaration:
 
     def __len__(self) -> int:
         return len(self.sensors)
+
+    @property
+    def points(self):
+        """The declaration protocol's name for `sensors`."""
+        return self.sensors
 
     @property
     def templated(self) -> list[DeclaredSensor]:

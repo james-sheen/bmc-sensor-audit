@@ -27,6 +27,11 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .verticals.field_strictness import strict_fields_as_text
+from .core import plugins as _plugins
+from .core import vocabulary as _vocabulary
+from .verticals import bmc as _bundled
+from .core.vocabulary import PluginError
 from .inventory.declaration_source import (DeclarationSourceError,
                                            candidate_from_walk,
                                            load_declaration_source, merge_sources)
@@ -38,7 +43,7 @@ from .inventory.redfish import (CertificatePinError, RedfishClient, Walk,
                                 walk_chassis, walk_digest, walk_from_dict)
 from .inventory.regression import compare_walks, parse_prefix_map
 from .report import (as_json, as_text, regression_as_json, regression_as_text,
-                     strict_fields_as_text)
+                     )
 
 EXIT_CLEAN, EXIT_REGRESSION, EXIT_INCOMPLETE = 0, 1, 2
 
@@ -425,7 +430,7 @@ def _report_unobserved_fields(walk: Walk, requested: bool) -> int:
     """
     if not requested or walk.fields_observed:
         return EXIT_CLEAN
-    from .report import unobserved_reason
+    from .verticals.field_strictness import unobserved_reason
 
     print(f"\nfield strictness was requested and could not be checked: "
           f"{unobserved_reason(walk)}.\nThis run has not answered the question it "
@@ -456,7 +461,7 @@ def _report_uncomparable_fields(before: Walk, after: Walk, requested: bool) -> i
     """
     if not requested or (before.fields_observed and after.fields_observed):
         return EXIT_CLEAN
-    from .report import unobserved_reason
+    from .verticals.field_strictness import unobserved_reason
 
     missing = [(label, walk) for label, walk in (("--before", before), ("--after", after))
                if not walk.fields_observed]
@@ -843,6 +848,14 @@ def build_parser() -> argparse.ArgumentParser:
     # usage error, so a downstream floor could be declared and never checked.
     parser.add_argument("--version", action="version",
                         version=f"bmc-sensor-audit {__version__}")
+    # The seam. Global rather than per-subcommand: a vertical supplies the
+    # vocabulary the whole run classifies with, not one command's.
+    parser.add_argument("--plugin", action="append", metavar="SPEC",
+                        help="load a vertical: module[:callable] or path.py[:callable]")
+    parser.add_argument("--no-entry-points", action="store_true",
+                        help="ignore installed entry points; use only --plugin "
+                             "and the environment")
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     declare = subparsers.add_parser(
@@ -990,7 +1003,10 @@ def build_parser() -> argparse.ArgumentParser:
 #: `http://` target refused correctly and crashed, and the consumer saw `1`.
 #: A tuple rather than a chain of `except` clauses, so adding a refusal is one
 #: edit in one place and the test below can enumerate it.
-REFUSALS = (CredentialError, CertificatePinError)
+# PluginError joins these because a vertical that could not be loaded is a
+# refusal with something to say, not a traceback from somewhere downstream
+# about a vocabulary nobody supplied.
+REFUSALS = (CredentialError, CertificatePinError, PluginError)
 
 
 class _StdoutThatOutlivesItsReader:
@@ -1062,6 +1078,22 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout = stdout
     try:
         args = build_parser().parse_args(argv)
+        # Verticals load BEFORE anything is read. A vocabulary supplied after a
+        # declaration has been classified is a vocabulary that did not apply.
+        use_entry_points = not getattr(args, "no_entry_points", False)
+        _plugins.load_all(getattr(args, "plugin", None) or (),
+                          entry_points=use_entry_points)
+        if use_entry_points and not _vocabulary.registered():
+            # Entry points exist only in an INSTALLED distribution. Run from a
+            # source checkout -- `python -m bmc_sensor_audit.cli` -- there are
+            # none, and the vertical this package ships would never load. It is
+            # bundled, so it registers here, through the same `register()` an
+            # outside vertical calls; what it does not get is a private path
+            # that skips the door.
+            #
+            # `--no-entry-points` deliberately does NOT reach this: asking for a
+            # run with no vertical must still produce a run with no vertical.
+            _bundled.register()
         return args.func(args)
     except REFUSALS as error:
         print(f"{error}", file=sys.stderr)

@@ -61,14 +61,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..inventory import sensor_types
-from ..inventory.entity_manager import ANY_TEMPLATE, Declaration, DeclaredSensor
+from ..core import vocabulary as _vocabulary
+from ..core.protocols import DeclarationSource, DeclaredPoint
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .supplemental import Supplemental
 
 __all__ = ["GeneratedSensor", "Manifest", "generate", "BOUND_OF_PROBLEM",
-           "pairing_candidates", "peer_property", "PEER_PREFIX"]
+           "peer_property", "PEER_PREFIX"]
 
 READING = "reading"
 WINDOW = "15m"
@@ -163,7 +163,7 @@ class Manifest:
     candidates: list[dict] = field(default_factory=list)
     supplemental_source: str | None = None
 
-    def exclude(self, reason: str, sensor: DeclaredSensor) -> None:
+    def exclude(self, reason: str, sensor: DeclaredPoint) -> None:
         self.excluded.setdefault(reason, []).append(sensor.display_name)
 
     def counts(self) -> dict[str, int]:
@@ -294,7 +294,7 @@ class Manifest:
         return f"{entity_type}.{indicator}"
 
 
-def _bounds(sensor: DeclaredSensor):
+def _bounds(sensor: DeclaredPoint):
     upper: dict[str, float] = {}
     lower: dict[str, float] = {}
     unmapped: list[tuple[str, str, float]] = []
@@ -342,46 +342,7 @@ def _indicator(upper: tuple[float | None, float | None],
     return indicator
 
 
-def pairing_candidates(declaration: Declaration) -> list[dict]:
-    """Multi-channel parts, offered as candidates and asserted as nothing.
-
-    A part declaring several channels is where a redundant pair would be if one
-    existed, so listing them saves an operator reading every configuration by hand.
-    That is the entire claim being made here.
-
-    **It is deliberately not a pairing**, and the two obvious derivations are both
-    refuted by the pinned corpus rather than merely doubted:
-
-    * *Same part, several channels.* A TMP421 declares `Name` and `Name1` -- the
-      chip's own die and an external diode. On a working board those differ by tens
-      of degrees, so pairing them would report a healthy machine as inconsistent.
-    * *Same declared thresholds.* `SLED1_THERM_LOCAL` through `SLED6_THERM_LOCAL`
-      carry identical bounds and sit on six different parts.
-
-    So the candidate list is a reading aid. What makes two sensors redundant is a
-    fact about the hardware, and it arrives from `supplemental.py` with a stated
-    basis or it does not arrive.
-    """
-    grouped: dict[str, list[DeclaredSensor]] = {}
-    for sensor in declaration.sensors:
-        if sensor.part and sensor.channel is not None:
-            grouped.setdefault(sensor.part, []).append(sensor)
-    candidates = []
-    for part, members in sorted(grouped.items()):
-        if len(members) < 2:
-            continue
-        candidates.append({
-            "part": part,
-            "type": members[0].type,
-            "source": Path(members[0].source).name if members[0].source else None,
-            "channels": [m.display_name for m in
-                         sorted(members, key=lambda m: (m.channel or 0))],
-            "note": "channels of one part; redundant only if an operator says so",
-        })
-    return candidates
-
-
-def generate(declaration: Declaration, *, domain_id: str = "bmc-sensor-audit",
+def generate(declaration: DeclarationSource, *, domain_id: str = "bmc-sensor-audit",
              expect_variation: bool = True,
              supplemental: "Supplemental | None" = None) -> tuple[dict, Manifest]:
     """Build a domain model and its manifest.
@@ -393,7 +354,8 @@ def generate(declaration: Declaration, *, domain_id: str = "bmc-sensor-audit",
     parameter because the calibration cannot be done without a real capture.
     """
     manifest = Manifest(domain_id=domain_id, expect_variation=expect_variation)
-    manifest.candidates = pairing_candidates(declaration)
+    # The vertical proposes peer groups; how it finds them is its business.
+    manifest.candidates = _vocabulary.current().peer_groups(declaration)
     modelled_regardless: set[str] = set()
     if supplemental is not None:
         manifest.supplemental_source = supplemental.source
@@ -406,17 +368,18 @@ def generate(declaration: Declaration, *, domain_id: str = "bmc-sensor-audit",
         manifest.anomalies.append(f"[{anomaly.kind}] {anomaly.sensor or '(config)'}: "
                                   f"{anomaly.detail}")
 
-    for sensor in declaration.sensors:
-        if ANY_TEMPLATE.search(sensor.name):
+    for sensor in declaration.points:
+        if sensor.is_templated:
             # Never fed. A `$bus` name becomes an entity type nothing can match, and
             # the engine cannot tell you that it will never fire.
             manifest.exclude("templated_name", sensor)
             continue
-        kind = sensor_types.classify(sensor.type)
-        if kind != sensor_types.SENSOR:
+        supplied = _vocabulary.current()
+        kind = supplied.classify(sensor.type)
+        if not supplied.is_auditable(kind):
             manifest.exclude(kind, sensor)
             continue
-        if sensor.disabled_in_config:
+        if sensor.disabled:
             manifest.exclude("disabled_in_config", sensor)
             continue
 

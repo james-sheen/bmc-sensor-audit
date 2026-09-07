@@ -26,7 +26,8 @@ import pytest
 from bmc_sensor_audit.inventory import redfish_schema
 from bmc_sensor_audit.inventory.redfish import (LEGACY_RESOURCES, RedfishClient,
                                                 walk_chassis, walk_from_dict)
-from bmc_sensor_audit.report import strict_fields_as_text, strict_fields_payload
+from bmc_sensor_audit.verticals.field_strictness import (strict_fields_as_text,
+                                                        strict_fields_payload)
 from bmc_sensor_audit.testing.mock_redfish import MockBMC, serve
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -375,7 +376,7 @@ class TestTheExitCodeIsTheClaim:
         Telling the operator of a failed walk to re-capture is telling them to do
         the thing that just failed. The floor is the same; the sentence is not.
         """
-        from bmc_sensor_audit.report import unobserved_reason
+        from bmc_sensor_audit.verticals.field_strictness import unobserved_reason
 
         bmc = MockBMC(shape="sensors", fail={"/redfish/v1/Chassis": 500})
         bmc.add("Inlet", reading=20.0)

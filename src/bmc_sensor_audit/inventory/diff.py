@@ -32,11 +32,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from .entity_manager import (
-    ANY_TEMPLATE, KNOWN_TEMPLATE, Declaration, DeclaredSensor,
-)
-from .redfish import LiveSensor, Walk
-from . import sensor_types
+from ..core.protocols import DeclarationSource, DeclaredPoint
+from ..core import vocabulary as _vocabulary
+from ..core.protocols import Capture, CapturedPoint
 
 __all__ = ["Finding", "Match", "DiffReport", "compare", "normalise_name",
            "expects_reading"]
@@ -55,7 +53,6 @@ _SEPARATORS = re.compile(r"[\s_\-]+")
 # Defining it twice is how the two copies come to disagree, and the direction
 # they disagree in here is the dangerous one: a matcher that recognises fewer
 # variables than the reader silently wildcards the difference.
-_TEMPLATE, _ANY_TEMPLATE = KNOWN_TEMPLATE, ANY_TEMPLATE
 
 
 @dataclass(frozen=True)
@@ -76,8 +73,8 @@ class Finding:
 
 @dataclass(frozen=True)
 class Match:
-    declared: DeclaredSensor
-    live: LiveSensor
+    declared: DeclaredPoint
+    live: CapturedPoint
     how: str          # "exact" | "normalised" | "template"
 
 
@@ -85,15 +82,15 @@ class Match:
 class DiffReport:
     findings: list[Finding] = field(default_factory=list)
     matches: list[Match] = field(default_factory=list)
-    unmatched_declared: list[DeclaredSensor] = field(default_factory=list)
-    unmatched_live: list[LiveSensor] = field(default_factory=list)
+    unmatched_declared: list[DeclaredPoint] = field(default_factory=list)
+    unmatched_live: list[CapturedPoint] = field(default_factory=list)
     walk_complete: bool = True
     absence_withheld: bool = False
     # Declarations excluded from expectation because their Type does not produce a
     # reading, keyed by kind. Reported, never silently dropped -- an exclusion
     # nobody can see is indistinguishable from a checker that forgot to look.
     not_sensor_kinds: dict[str, list] = field(default_factory=dict)
-    # Declaration sources other than entity-manager that this report was judged
+    # DeclarationSource sources other than entity-manager that this report was judged
     # against. Carried ON THE REPORT rather than passed to each renderer, so a new
     # output format cannot be added without the provenance coming with it. A reader
     # who cannot tell a manufacturer's declaration from a snapshot of one machine is
@@ -118,8 +115,10 @@ class DiffReport:
             "present_not_reading": len(self.matches) - reading,
             "declared_absent": len(self.unmatched_declared),
             "undeclared_present": len(self.unmatched_live),
-            "not_a_sensor": len(self.not_sensor_kinds.get(sensor_types.NOT_A_SENSOR, [])),
-            "unrecognised_type": len(self.not_sensor_kinds.get(sensor_types.UNRECOGNISED, [])),
+            # The kinds a vertical reports separately, under the names IT gives
+            # them. Naming them here is what made this module know about BMCs.
+            **{key: len(self.not_sensor_kinds.get(kind, []))
+               for kind, key in _vocabulary.current().count_keys.items()},
             "findings": len(self.findings),
             "regressions": len(self.regressions),
         }
@@ -136,53 +135,24 @@ def normalise_name(name: str) -> str:
     return _SEPARATORS.sub("_", name.strip().lower())
 
 
-def _template_pattern(name: str) -> re.Pattern[str] | None:
-    """Turn `$bus_ADC0` into a pattern that matches its substituted form.
-
-    Anchored at both ends, and only a KNOWN variable becomes a wildcard, so the
-    literal remainder still has to match: `$bus_ADC0` pairs with `13_ADC0` and
-    not with `P12V_AUX`.
-
-    The first cut of this got it wrong in a way worth keeping a note about. It
-    wildcarded `\\$[A-Za-z_]\\w*`, and because `\\w` includes the underscore that
-    pattern consumed `$bus_ADC0` entirely -- one token, no literal left, and a
-    resulting regex of `^.*$` that matched every sensor on the machine. A greedy
-    class that eats the separator turns a precise matcher into an indiscriminate
-    one, and the failure is silent: every declared sensor pairs with whatever the
-    walk returned first, and the board reports clean.
-
-    Returns None when the name carries a variable this tool does not know. An
-    unrecognised variable is reported as an unmatched sensor, never wildcarded.
-    """
-    if not _ANY_TEMPLATE.search(name):
-        return None
-    parts = [re.escape(p) for p in _TEMPLATE.split(name)]
-    if len(parts) == 1:                       # a `$` that named no known variable
-        return None
-    pattern = r"[\w.:-]+".join(parts)
-    if _ANY_TEMPLATE.search(pattern):         # a known variable AND an unknown one
-        return None
-    return re.compile("^" + pattern + "$", re.I)
-
-
-def _index_live(walk: Walk) -> tuple[dict[str, LiveSensor], dict[str, LiveSensor]]:
-    exact: dict[str, LiveSensor] = {}
-    normalised: dict[str, LiveSensor] = {}
+def _index_live(walk: Capture) -> tuple[dict[str, CapturedPoint], dict[str, CapturedPoint]]:
+    exact: dict[str, CapturedPoint] = {}
+    normalised: dict[str, CapturedPoint] = {}
     for sensor in walk:
         exact.setdefault(sensor.name, sensor)
         normalised.setdefault(normalise_name(sensor.name), sensor)
     return exact, normalised
 
 
-def _pair(declaration: Iterable[DeclaredSensor], walk: Walk) -> tuple[list[Match], list[DeclaredSensor]]:
+def _pair(declaration: Iterable[DeclaredPoint], walk: Capture) -> tuple[list[Match], list[DeclaredPoint]]:
     exact, normalised = _index_live(walk)
     claimed: set[str] = set()
     matches: list[Match] = []
-    unmatched: list[DeclaredSensor] = []
+    unmatched: list[DeclaredPoint] = []
 
     # Exact, then normalised, then template -- most confident first, so a
     # template pattern can never steal a sensor an exact name would have claimed.
-    pending: list[DeclaredSensor] = []
+    pending: list[DeclaredPoint] = []
     for declared in declaration:
         live = exact.get(declared.name)
         if live is not None and live.path not in claimed:
@@ -191,7 +161,7 @@ def _pair(declaration: Iterable[DeclaredSensor], walk: Walk) -> tuple[list[Match
         else:
             pending.append(declared)
 
-    still_pending: list[DeclaredSensor] = []
+    still_pending: list[DeclaredPoint] = []
     for declared in pending:
         live = normalised.get(normalise_name(declared.name))
         if live is not None and live.path not in claimed:
@@ -201,7 +171,7 @@ def _pair(declaration: Iterable[DeclaredSensor], walk: Walk) -> tuple[list[Match
             still_pending.append(declared)
 
     for declared in still_pending:
-        pattern = _template_pattern(declared.name)
+        pattern = _vocabulary.current().template_pattern(declared.name)
         hit = None
         if pattern is not None:
             for sensor in walk:
@@ -234,7 +204,7 @@ def _compare_thresholds(match: Match, findings: list[Finding]) -> None:
             findings.append(Finding(
                 "threshold_missing", declared.display_name,
                 f"config declares a {threshold.bound} {threshold.level} threshold "
-                f"at {threshold.value:g}; the live sensor carries none",
+                f"at {threshold.value:g}; the captured point carries none",
                 declared.source, live.path))
         elif not _close(actual, threshold.value):
             findings.append(Finding(
@@ -248,7 +218,7 @@ def _close(a: float, b: float, *, rel: float = 1e-6) -> bool:
     return abs(a - b) <= rel * max(1.0, abs(a), abs(b))
 
 
-def expects_reading(sensor: DeclaredSensor) -> bool:
+def expects_reading(sensor: DeclaredPoint) -> bool:
     """Whether absence of this declaration should count as a regression.
 
     **The `Type` filter is a fact about entity-manager, not about declarations in
@@ -267,7 +237,7 @@ def expects_reading(sensor: DeclaredSensor) -> bool:
     """
     if sensor.expects_reading is not None:
         return sensor.expects_reading
-    return sensor_types.is_expected_live(sensor.type)
+    return _vocabulary.current().is_expected_live(sensor.type)
 
 
 def _classify_excluded(declared: list) -> dict:
@@ -281,12 +251,12 @@ def _classify_excluded(declared: list) -> dict:
     for sensor in declared:
         if expects_reading(sensor):
             continue
-        kind = sensor_types.classify(sensor.type)
+        kind = _vocabulary.current().classify(sensor.type)
         excluded.setdefault(kind, []).append(sensor)
     return excluded
 
 
-def compare(declaration: Declaration, walk: Walk, *,
+def compare(declaration: DeclarationSource, walk: Capture, *,
             include_disabled_in_config: bool = False) -> DiffReport:
     """Diff a declaration against a walk.
 
@@ -317,7 +287,7 @@ def compare(declaration: Declaration, walk: Walk, *,
     report.unmatched_live = [s for s in walk if s.path not in matched_paths]
 
     if not include_disabled_in_config:
-        unmatched_declared = [s for s in unmatched_declared if not s.disabled_in_config]
+        unmatched_declared = [s for s in unmatched_declared if not s.disabled]
 
     # The same move again, for a bigger population and a worse symptom. An
     # `Exposes` entry is not necessarily a sensor: PID loops, stepwise fan curves,
@@ -338,26 +308,19 @@ def compare(declaration: Declaration, walk: Walk, *,
     for anomaly in declaration.anomalies:
         findings.append(Finding(
             anomaly.kind, anomaly.sensor or "(config)", anomaly.detail, anomaly.source))
-    # A sensor the deprecated tree reports and the modern collection omits.
-    # Present on one interface, absent from another -- a firmware defect, and one
-    # that a tool reading only its preferred tree cannot see at all.
-    for name, shape in walk.divergence:
-        findings.append(Finding(
-            "interface_divergence", name,
-            f"reported under the deprecated {shape} tree and absent from the "
-            f"Sensors collection on the same chassis; a client reading only the "
-            f"current schema does not see this sensor at all",
-            None, None))
+    # Findings only this domain can produce from its own capture. The diff does
+    # not know what they are; it knows they belong beside its own.
+    findings.extend(_vocabulary.current().capture_findings(walk))
     for source, reason in declaration.unreadable:
         findings.append(Finding(
             "config_unreadable", "(config)",
-            f"{reason} -- every sensor this file declares is unverifiable, not absent",
+            f"{reason} -- every point this file declares is unverifiable, not absent",
             source))
 
     for match in all_matches:
         live = match.live
         name = match.declared.display_name
-        if match.declared.disabled_in_config:
+        if match.declared.disabled:
             # The config says this hardware is switched off. If the machine is
             # reporting it anyway, the two disagree, and the config is the thing
             # every downstream generator trusts.
@@ -385,7 +348,7 @@ def compare(declaration: Declaration, walk: Walk, *,
         if match.how != "exact":
             findings.append(Finding(
                 "matched_inexactly", name,
-                f"matched to live sensor {live.name!r} by {match.how}, not by an "
+                f"matched to captured point {live.name!r} by {match.how}, not by an "
                 f"exact name; confirm the pairing before trusting its findings",
                 match.declared.source, live.path))
 
@@ -394,14 +357,14 @@ def compare(declaration: Declaration, walk: Walk, *,
         for declared in unmatched_declared:
             findings.append(Finding(
                 "declared_absent", declared.display_name,
-                f"declared by {declared.type or 'an entry'} in the configuration "
-                f"and not reported by the machine at all",
+                f"declared by {declared.type or 'an entry'} in the declaration "
+                f"and not present in the capture at all",
                 declared.source))
         for live in report.unmatched_live:
             findings.append(Finding(
                 "undeclared_present", live.name,
-                f"reported by the machine at {live.path} and declared nowhere in "
-                f"the configuration set",
+                f"present in the capture at {live.path} and declared nowhere "
+                f"in the declaration",
                 None, live.path))
     else:
         # Withheld on purpose. See the module docstring.

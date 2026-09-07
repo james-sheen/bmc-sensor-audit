@@ -270,13 +270,24 @@ class TestTheVocabularyStaysWhole:
 
     @staticmethod
     def _emitted() -> set[str]:
+        """Every change kind the SYSTEM emits, not the ones one module does.
+
+        This scanned `regression.py` alone until five kinds moved to the vertical
+        that supplies them -- units, enabled/disabled, reading lost, tree shape.
+        The kinds were still emitted; the scan had stopped being able to see
+        them, and the guard fired saying nothing produced them. A population
+        narrower than the claim reports an absence that is not there.
+        """
         import re
 
         from bmc_sensor_audit.inventory import regression as module
 
-        source = Path(module.__file__).read_text()
-        kinds = set(re.findall(r'Change\(\s*"([a-z_]+)"', source))
-        assert kinds, "no change kinds found in the source; the pattern moved"
+        roots = [Path(module.__file__),
+                 *sorted((Path(module.__file__).parents[1] / "verticals").glob("*.py"))]
+        kinds: set[str] = set()
+        for path in roots:
+            kinds |= set(re.findall(r'Change\(\s*"([a-z_]+)"', path.read_text()))
+        assert kinds, "no change kinds found in any source; the pattern moved"
         return kinds
 
     def test_every_kind_is_ranked_and_has_a_headline(self):

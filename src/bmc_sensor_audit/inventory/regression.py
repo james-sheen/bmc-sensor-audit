@@ -44,7 +44,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from .redfish import LiveSensor, Walk
+from ..core import vocabulary as _vocabulary
+from ..core.protocols import Capture, CapturedPoint
 
 __all__ = ["Change", "RegressionReport", "compare_walks", "parse_prefix_map",
            "REGRESSION_KINDS"]
@@ -104,7 +105,7 @@ class RegressionReport:
         return by_kind
 
 
-def _index(walk: Walk) -> tuple[dict[str, LiveSensor], dict[str, LiveSensor]]:
+def _index(walk: Capture) -> tuple[dict[str, CapturedPoint], dict[str, CapturedPoint]]:
     """By name and by URI, first occurrence winning in both.
 
     `setdefault` rather than assignment because a machine can report the same name
@@ -112,8 +113,8 @@ def _index(walk: Walk) -> tuple[dict[str, LiveSensor], dict[str, LiveSensor]]:
     walk that read both keeps whichever survived the shape merge. Last-wins would
     silently pair against a different object between the two walks.
     """
-    by_name: dict[str, LiveSensor] = {}
-    by_path: dict[str, LiveSensor] = {}
+    by_name: dict[str, CapturedPoint] = {}
+    by_path: dict[str, CapturedPoint] = {}
     for sensor in walk:
         by_name.setdefault(sensor.name, sensor)
         by_path.setdefault(sensor.path, sensor)
@@ -164,15 +165,15 @@ def _apply_prefix(name: str, prefix_map: Sequence[tuple[str, str]]) -> str:
     return name
 
 
-def _pair(before: Walk, after: Walk,
+def _pair(before: Capture, after: Capture,
           prefix_map: Sequence[tuple[str, str]] = ()) -> tuple[
-              list[tuple[LiveSensor, LiveSensor]], list[LiveSensor], list[LiveSensor],
-              list[tuple[LiveSensor, LiveSensor]]]:
+              list[tuple[CapturedPoint, CapturedPoint]], list[CapturedPoint], list[CapturedPoint],
+              list[tuple[CapturedPoint, CapturedPoint]]]:
     before_names, before_paths = _index(before)
     after_names, after_paths = _index(after)
 
-    pairs: list[tuple[LiveSensor, LiveSensor]] = []
-    prefixed: list[tuple[LiveSensor, LiveSensor]] = []
+    pairs: list[tuple[CapturedPoint, CapturedPoint]] = []
+    prefixed: list[tuple[CapturedPoint, CapturedPoint]] = []
     claimed_before: set[int] = set()
     claimed_after: set[int] = set()
 
@@ -232,7 +233,7 @@ def _pair(before: Walk, after: Walk,
         new = after_paths.get(path)
         if new is None or id(new) in claimed_after:
             continue
-        if old.units != new.units or old.resource != new.resource:
+        if not _vocabulary.current().same_point(old, new):
             continue
         pairs.append((old, new))
         claimed_before.add(id(old))
@@ -259,8 +260,8 @@ def _common_prefix(names: Sequence[str]) -> str:
     return first
 
 
-def _undeclared_prefix_shift(gone: Sequence[LiveSensor],
-                             arrived: Sequence[LiveSensor]) -> Change | None:
+def _undeclared_prefix_shift(gone: Sequence[CapturedPoint],
+                             arrived: Sequence[CapturedPoint]) -> Change | None:
     """A whole subtree vanishing while an identically-shaped one appears.
 
     **Reports and does not pair.** The removals stay removals and the gate still
@@ -307,7 +308,7 @@ def _undeclared_prefix_shift(gone: Sequence[LiveSensor],
         f"happened, re-run with --aggregation-prefix {old_prefix}={new_prefix}")
 
 
-def _compare_thresholds(old: LiveSensor, new: LiveSensor, changes: list[Change]) -> None:
+def _compare_thresholds(old: CapturedPoint, new: CapturedPoint, changes: list[Change]) -> None:
     for slot, value in sorted(old.thresholds.items()):
         bound, level = slot
         current = new.thresholds.get(slot)
@@ -335,7 +336,7 @@ def _close(a: float, b: float, *, rel: float = 1e-6) -> bool:
     return abs(a - b) <= rel * max(1.0, abs(a), abs(b))
 
 
-def compare_walks(before: Walk, after: Walk, *,
+def compare_walks(before: Capture, after: Capture, *,
                   prefix_map: Sequence[tuple[str, str]] = ()) -> RegressionReport:
     """Diff two walks of one machine, oldest first.
 
@@ -344,7 +345,7 @@ def compare_walks(before: Walk, after: Walk, *,
     """
     report = RegressionReport(before_count=len(before), after_count=len(after),
                               complete=before.complete and after.complete,
-                              fields_comparable=before.fields_observed and after.fields_observed)
+                              fields_comparable=_vocabulary.current().captures_comparable(before, after))
     changes: list[Change] = []
 
     pairs, gone, arrived, prefixed = _pair(before, after, prefix_map)
@@ -369,35 +370,12 @@ def compare_walks(before: Walk, after: Walk, *,
                 f"this one, at the same URI. Every dashboard, alert rule and trend "
                 f"query keyed on the old string stops matching",
                 old.path, new.path))
-        if old.units != new.units and (old.units or new.units):
-            changes.append(Change(
-                "units_changed", new.name,
-                f"units were {old.units!r}, are now {new.units!r}",
-                old.path, new.path))
-        if old.is_enabled and not new.is_enabled:
-            changes.append(Change(
-                "sensor_disabled", new.name,
-                f"was enabled and now reports State={new.state!r}. A disabled sensor "
-                f"is typically invisible in the web UI", old.path, new.path))
-        elif not old.is_enabled and new.is_enabled:
-            changes.append(Change(
-                "sensor_enabled", new.name,
-                f"was State={old.state!r} and is now enabled", old.path, new.path))
-        if old.reading is not None and new.reading is None and new.is_enabled:
-            changes.append(Change(
-                "reading_lost", new.name,
-                f"read {old.reading:g} in the earlier walk and carries no reading in "
-                f"this one, while still reporting as enabled", old.path, new.path))
+        # Change rules only this domain can state. Each one reads something the
+        # other bridge's capture does not have, so the neutral gate asks rather
+        # than knowing.
+        changes.extend(_vocabulary.current().point_changes(
+            old, new, comparable=report.fields_comparable))
         _compare_thresholds(old, new, changes)
-        if report.fields_comparable:
-            appeared = tuple(n for n in new.undeclared if n not in old.undeclared)
-            if appeared:
-                noun = "property" if len(appeared) == 1 else "properties"
-                changes.append(Change(
-                    "field_drift", new.name,
-                    f"reports {len(appeared)} {noun} this firmware did not report "
-                    f"before and the published schema does not declare: "
-                    f"{', '.join(appeared)}", old.path, new.path))
 
     if report.complete:
         # Emitted before the removals it explains, and it is why this kind sorts
@@ -425,17 +403,11 @@ def compare_walks(before: Walk, after: Walk, *,
             incomplete = "both"
         changes.append(Change(
             "walk_incomplete", "(walk)",
-            f"{incomplete} walk did not complete, so a sensor missing from it "
+            f"{incomplete} capture did not complete, so a point missing from it "
             f"cannot be told apart from a subtree that was never read. Sensors "
             f"appearing and disappearing are not reported"))
 
-    lost_shapes = sorted(before.shapes_seen - after.shapes_seen)
-    if lost_shapes:
-        changes.append(Change(
-            "tree_shape_gone", "(chassis)",
-            f"the earlier walk found {', '.join(lost_shapes)} and this one does not. "
-            f"A client reading only that interface sees nothing at all now, even "
-            f"where the sensors themselves are still reported elsewhere"))
+    changes.extend(_vocabulary.current().capture_changes(before, after))
 
     report.changes = changes
     return report

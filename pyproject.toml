@@ -47,6 +47,12 @@ dev = ["pytest>=7"]
 [project.scripts]
 bmc-sensor-audit = "bmc_sensor_audit.cli:main"
 
+# The vertical this distribution bundles loads through the same door an
+# outside vertical uses. A private path in for the bundled one would make
+# the seam a naming convention rather than a seam.
+[project.entry-points."bmc_sensor_audit.plugins"]
+bmc = "bmc_sensor_audit.verticals.bmc:register"
+
 # An index page with no way back to the source is a dead end for the one reader
 # who wants to check a claim. CITATION.cff has carried the repository URL since
 # it was written; this is the same fact, in the place a package manager reads.
