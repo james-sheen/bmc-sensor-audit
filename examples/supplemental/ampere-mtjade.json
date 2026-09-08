@@ -1,5 +1,5 @@
 {
-  "format": "bmc-sensor-audit/supplemental/1",
+  "format": "presence-audit/supplemental/1",
   "provenance": "Worked example for the Ampere Mt.Jade configuration vendored at tests/fixtures/upstream/ampere/mtjade.json. Every entry below is established by that file plus the PMBus command set the labels name. NOTHING HERE IS A SCHEMATIC CLAIM: no redundant group and no counter is declared, because neither can be established from a configuration file and this example holds only what can. An ODM holding the board schematic is the party that can add them -- see TEMPLATE.json.",
   "flows": [
     {

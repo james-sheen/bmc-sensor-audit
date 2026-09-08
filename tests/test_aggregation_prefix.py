@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from bmc_sensor_audit.inventory.redfish import (  # noqa: E402
     WALK_FORMAT, RedfishClient, walk_chassis, walk_from_dict)
-from bmc_sensor_audit.inventory.regression import (  # noqa: E402
+from presence_audit.regression import (  # noqa: E402
     REGRESSION_KINDS, _apply_prefix, compare_walks, parse_prefix_map)
 from bmc_sensor_audit.testing.mock_redfish import MockBMC, serve  # noqa: E402
 

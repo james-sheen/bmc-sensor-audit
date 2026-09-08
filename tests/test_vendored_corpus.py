@@ -321,7 +321,7 @@ class TestTheEndToEndDiffReproducesFromAClone:
     @pytest.fixture(scope="class")
     @classmethod
     def report(cls):
-        from bmc_sensor_audit.inventory.diff import compare
+        from presence_audit.diff import compare
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
         declaration = load_declaration([str(UPSTREAM / "meta" / "bletchley")])
         walk = walk_from_dict(json.loads(

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 
-from bmc_sensor_audit.detect import feeder, generator
+from presence_audit import feeder, generator
 
 # The interval the feeder declares to the engine for every observation. Read off
 # the call rather than restated as a constant: a number written twice drifts, and

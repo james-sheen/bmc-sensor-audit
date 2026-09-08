@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from bmc_sensor_audit.inventory.declaration_source import (  # noqa: E402
     FLEET_BASELINE_FORMAT, PDR_FORMAT, SOURCE_PRECEDENCE, DeclarationSourceError,
     candidate_from_walk, load_declaration_source, merge_sources)
-from bmc_sensor_audit.inventory.diff import compare  # noqa: E402
+from presence_audit.diff import compare  # noqa: E402
 from bmc_sensor_audit.inventory.entity_manager import (  # noqa: E402
     parse_config_text)
 from bmc_sensor_audit.inventory.redfish import (  # noqa: E402

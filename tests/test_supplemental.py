@@ -25,9 +25,9 @@ UPSTREAM = ROOT / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(ROOT / "src"))
 
 from bmc_sensor_audit.verticals.peer_groups import pairing_candidates
-from bmc_sensor_audit.detect.generator import (  # noqa: E402
+from presence_audit.generator import (  # noqa: E402
     generate, peer_property)
-from bmc_sensor_audit.detect.supplemental import (  # noqa: E402
+from presence_audit.supplemental import (  # noqa: E402
     FORMAT, SupplementalError, load_supplemental, unmatched_names)
 from bmc_sensor_audit.inventory.entity_manager import load_declaration  # noqa: E402
 
@@ -94,7 +94,7 @@ class TestCandidatesAreOfferedAndAssertedByNobody:
     def test_a_candidate_never_becomes_a_pairing_on_its_own(self, declaration):
         """The whole distinction. Generating without a supplemental file must produce
         a model with no agreement check in it, however many candidates exist."""
-        model, manifest = generate(declaration)
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit")
         assert manifest.candidates
         assert manifest.counts()["redundant_groups"] == 0
         for indicators in model["domain"]["indicators"].values():
@@ -188,7 +188,7 @@ class TestTheGeneratedModelCarriesTheDeclaration:
     def built(self, tmp_path, declaration):
         path = _write(tmp_path, redundant_groups=[
             _group(["MB_U73_THERM_LOCAL", "MB_U73_THERM_REMOTE"], tolerance=0.10)])
-        model, manifest = generate(declaration,
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit",
                                    supplemental=load_supplemental(path))
         return model, manifest
 
@@ -248,7 +248,7 @@ class TestTheGeneratedModelCarriesTheDeclaration:
         path = _write(tmp_path, redundant_groups=[
             _group(["MB_U73_THERM_LOCAL", "MB_U73_THERM_REMOTE"],
                    tolerance_absolute=3.0)])
-        model, manifest = generate(declaration,
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit",
                                    supplemental=load_supplemental(path))
         block = model["domain"]["indicators"][
             manifest.type_for("MB_U73_THERM_LOCAL")][0]["consistency"]

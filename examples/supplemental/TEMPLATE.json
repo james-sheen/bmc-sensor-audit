@@ -1,5 +1,5 @@
 {
-  "format": "bmc-sensor-audit/supplemental/1",
+  "format": "presence-audit/supplemental/1",
   "provenance": "TEMPLATE -- states nothing about any board. Copy it, replace every REPLACE_ME name with a sensor name your configuration actually declares, and replace every basis with what establishes the claim on YOUR hardware. Then put your own sentence here saying who established these and how. The names below are placeholders on purpose: they match no declaration, so a run against this file unedited stops and names them rather than checking nothing and passing.",
   "redundant_groups": [
     {

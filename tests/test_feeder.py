@@ -23,11 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(ROOT / "src"))
 
-from bmc_sensor_audit.detect.feeder import (  # noqa: E402
+from presence_audit.feeder import (  # noqa: E402
     ENVELOPE_SCHEMA_VERSION, STUCK_AT_SAMPLE_FLOOR, evaluate, feed,
     unmapped_observations)
-from bmc_sensor_audit.detect.generator import READING, generate  # noqa: E402
-from bmc_sensor_audit.inventory.diff import compare  # noqa: E402
+from presence_audit.generator import READING, generate  # noqa: E402
+from presence_audit.diff import compare  # noqa: E402
 from bmc_sensor_audit.inventory.entity_manager import load_declaration  # noqa: E402
 from bmc_sensor_audit.inventory.redfish import walk_from_dict  # noqa: E402
 
@@ -53,7 +53,7 @@ class StubSession:
 @pytest.fixture(scope="module")
 def built():
     declaration = load_declaration([str(UPSTREAM)])
-    model, manifest = generate(declaration)
+    model, manifest = generate(declaration, domain_id="bmc-sensor-audit")
     return declaration, model, manifest
 
 
@@ -433,7 +433,7 @@ class TestTheDeclineVocabularyIsClassifiedAheadOfTheEngine:
     """
 
     def _outcome(self, reason, **kw):
-        from bmc_sensor_audit.detect.feeder import evaluate, FeedResult, Manifest
+        from presence_audit.feeder import evaluate, FeedResult, Manifest
         envelope = {"findings": [], "not_checked": [
             {"entity_id": "r1", "entity_type": "Rail", "indicator": "pin_w",
              "axiom": "CONSERVATION", "reason": reason, "detail": "zero total"}]}
@@ -500,7 +500,7 @@ class TestTheDeclineVocabularyIsClassifiedAheadOfTheEngine:
         values that arrived*; this means *nobody supplied the number*. Widening
         the older set would have made its own comment false, which is the drift
         this file keeps catching in itself."""
-        from bmc_sensor_audit.detect import feeder
+        from presence_audit import feeder
         assert "no_threshold" not in feeder._NOT_APPLICABLE_REASONS
         assert "no_threshold" in feeder._NO_THRESHOLD_REASONS
         assert not (feeder._NO_THRESHOLD_REASONS

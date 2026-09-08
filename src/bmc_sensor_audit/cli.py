@@ -28,21 +28,21 @@ from typing import Any
 
 from . import __version__
 from .verticals.field_strictness import strict_fields_as_text
-from .core import plugins as _plugins
-from .core import vocabulary as _vocabulary
+from presence_audit import plugins as _plugins
+from presence_audit import vocabulary as _vocabulary
 from .verticals import bmc as _bundled
-from .core.vocabulary import PluginError
+from presence_audit.vocabulary import PluginError
 from .inventory.declaration_source import (DeclarationSourceError,
                                            candidate_from_walk,
                                            load_declaration_source, merge_sources)
-from .inventory.diff import compare
+from presence_audit.diff import compare
 from .inventory.entity_manager import load_declaration
 from .inventory.redfish import (CertificatePinError, RedfishClient, Walk,
                                 order_walks, validate_walk,
                                 etag_cache, membership_unchanged,
                                 walk_chassis, walk_digest, walk_from_dict)
-from .inventory.regression import compare_walks, parse_prefix_map
-from .report import (as_json, as_text, regression_as_json, regression_as_text,
+from presence_audit.regression import compare_walks, parse_prefix_map
+from presence_audit.report import (as_json, as_text, regression_as_json, regression_as_text,
                      )
 
 EXIT_CLEAN, EXIT_REGRESSION, EXIT_INCOMPLETE = 0, 1, 2
@@ -582,11 +582,11 @@ def _cmd_detect(args: argparse.Namespace) -> int:
               "Stage 1 coverage above is complete and unaffected.", file=sys.stderr)
         return EXIT_INCOMPLETE
 
-    from .detect.feeder import evaluate, feed
-    from .detect.generator import generate
-    from .detect.supplemental import (SupplementalError, load_supplemental,
+    from presence_audit.feeder import evaluate, feed
+    from presence_audit.generator import generate
+    from presence_audit.supplemental import (SupplementalError, load_supplemental,
                                       unmatched_names)
-    from .report import detect_as_text, supplemental_as_text
+    from presence_audit.report import detect_as_text, supplemental_as_text
 
     supplemental = None
     if args.supplemental:
@@ -612,7 +612,12 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         # what was declared before they read a verdict that rests on it.
         print(supplemental_as_text(supplemental))
 
-    model, manifest = generate(declaration, expect_variation=not args.no_stuck_at,
+    # The domain id is DECLARED here rather than defaulted in the generator.
+    # It used to default to this distribution's name, in code that is now
+    # domain-neutral and cannot know what domain it is generating for. The
+    # string is unchanged, so an emitted model is byte-identical to before.
+    model, manifest = generate(declaration, domain_id="bmc-sensor-audit",
+                               expect_variation=not args.no_stuck_at,
                                supplemental=supplemental)
     if args.model_out:
         Path(args.model_out).write_text(yaml.safe_dump(model))
@@ -637,7 +642,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         # `source: unavailable`, and that refusal reads a lot like a clean run.
         from arbiter_engine.api import attest
 
-        from .detect.attestation import build_attestation
+        from presence_audit.attestation import build_attestation
         # The artifact leaves through a different door from every committed file,
         # and the hygiene perimeter guards commits. `target` is a Redfish URL by
         # default, so an artifact uploaded from CI can publish an internal hostname
@@ -658,7 +663,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         # No exit floor: `check` completed and its findings stand. What did not
         # complete is the evidence the engine attaches to them, which is a weaker
         # thing than the audit itself.
-        from .report import unattested_notice
+        from presence_audit.report import unattested_notice
 
         notice = unattested_notice(artifact, args.attest_out)
         if notice:
@@ -740,7 +745,7 @@ def _cmd_validate_attestation(args: argparse.Namespace) -> int:
     the command existing rather than the rule living inside a CI workflow where only
     the producer can reach it.
     """
-    from .detect.attestation import validate_attestation
+    from presence_audit.attestation import validate_attestation
 
     try:
         artifact = json.loads(Path(args.path).read_text())

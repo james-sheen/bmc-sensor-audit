@@ -1,4 +1,4 @@
-# `bmc-sensor-audit/attestation/1`
+# `presence-audit/attestation/1`
 
 A per-run record of what was checked, what was **declined**, and the measurement
 behind every finding. Written by `detect --attest-out FILE`, checked by
@@ -29,7 +29,7 @@ Every key the builder writes today. *Stability* is the promise made within `/1`.
 
 | Key | Type | Meaning | Stability |
 |---|---|---|---|
-| `format` | string | `bmc-sensor-audit/attestation/1`. The contract this file claims. | Fixed; a change is a new major |
+| `format` | string | `presence-audit/attestation/1`. The contract this file claims. | Fixed; a change is a new major |
 | `target` | string | What was audited — a Redfish URL, or the path of the recorded walk. **May name an internal host; see the note below.** | Present, may be null for an unnamed source |
 | `engine.schema_version` | integer | The envelope contract the judgment was made **under**. This is the artifact's provenance chain into the engine, and it is not the engine's release number. | Present whenever the engine stamped one |
 | `engine.boundary` | string | **The engine's own statement of what its evidence does and does not establish**, quoted verbatim. | Present **whenever `evidence` is**; wording is the engine's, not ours |

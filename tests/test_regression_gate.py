@@ -18,11 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from bmc_sensor_audit.inventory.diff import compare
+from presence_audit.diff import compare
 from bmc_sensor_audit.inventory.entity_manager import load_declaration
 from bmc_sensor_audit.inventory.redfish import RedfishClient, walk_chassis, walk_from_dict
-from bmc_sensor_audit.inventory.regression import compare_walks
-from bmc_sensor_audit.report import regression_as_json, regression_as_text
+from presence_audit.regression import compare_walks
+from presence_audit.report import regression_as_json, regression_as_text
 from bmc_sensor_audit.testing.mock_redfish import MockBMC, serve
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -280,10 +280,19 @@ class TestTheVocabularyStaysWhole:
         """
         import re
 
-        from bmc_sensor_audit.inventory import regression as module
+        from presence_audit import regression as module
 
-        roots = [Path(module.__file__),
-                 *sorted((Path(module.__file__).parents[1] / "verticals").glob("*.py"))]
+        # The population spans TWO DISTRIBUTIONS now, and it has to be named
+        # from both ends. It used to be `regression.py`'s sibling directory,
+        # which worked only while the vertical lived beside it; after the split
+        # that walk reaches `presence-audit`'s own parent and finds no verticals
+        # at all -- so the scan came up short and the guard reported four kinds
+        # as unemittable that are emitted on every run. Exactly the failure this
+        # docstring already describes, recreated for a new reason.
+        import bmc_sensor_audit
+        verticals = Path(bmc_sensor_audit.__file__).parent / "verticals"
+        assert verticals.is_dir(), f"{verticals} is not where this package's vertical lives"
+        roots = [Path(module.__file__), *sorted(verticals.glob("*.py"))]
         kinds: set[str] = set()
         for path in roots:
             kinds |= set(re.findall(r'Change\(\s*"([a-z_]+)"', path.read_text()))
@@ -291,7 +300,7 @@ class TestTheVocabularyStaysWhole:
         return kinds
 
     def test_every_kind_is_ranked_and_has_a_headline(self):
-        from bmc_sensor_audit.report import CHANGE_ORDER, _CHANGE_HEADLINE
+        from presence_audit.report import CHANGE_ORDER, _CHANGE_HEADLINE
 
         emitted = self._emitted()
         assert emitted - set(CHANGE_ORDER) == set(), "unranked kinds sort last silently"
@@ -300,12 +309,12 @@ class TestTheVocabularyStaysWhole:
     def test_nothing_is_ranked_that_cannot_be_emitted(self):
         """The other direction. A stale entry is not dangerous, but it is a claim
         that the report can produce something it cannot."""
-        from bmc_sensor_audit.report import CHANGE_ORDER
+        from presence_audit.report import CHANGE_ORDER
 
         assert set(CHANGE_ORDER) - self._emitted() == set()
 
     def test_every_regression_kind_is_one_the_module_emits(self):
-        from bmc_sensor_audit.inventory.regression import REGRESSION_KINDS
+        from presence_audit.regression import REGRESSION_KINDS
 
         assert set(REGRESSION_KINDS) - self._emitted() == set(), (
             "a kind listed as a regression that nothing produces cannot fail a "

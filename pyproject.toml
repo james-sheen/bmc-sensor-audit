@@ -32,7 +32,13 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # runner or a jump host with nothing provisioned first. `arbiter-engine` arrives
 # at Stage 2 and not before -- as an optional extra, so Stage 1 keeps that
 # property even after Stage 2 exists.
-dependencies = []
+# `presence-audit` is the domain-neutral half of what this package used to be:
+# the protocol a vertical is written against, the three-valued presence diff, the
+# regression gate, the report, the model generator and the attestation. It was
+# extracted by IMPORT GRAPH -- every module in it reaches nothing BMC -- and it
+# is a hard dependency rather than an extra because Stage 1 cannot run without
+# it. Its own dependency list is empty, so this adds no transitive weight.
+dependencies = ["presence-audit>=0.1.0,<0.2"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
@@ -50,7 +56,10 @@ bmc-sensor-audit = "bmc_sensor_audit.cli:main"
 # The vertical this distribution bundles loads through the same door an
 # outside vertical uses. A private path in for the bundled one would make
 # the seam a naming convention rather than a seam.
-[project.entry-points."bmc_sensor_audit.plugins"]
+# The group belongs to the package that OWNS the registry, which is no longer
+# this one. A group still named after this distribution would keep working for
+# this vertical alone and be undiscoverable for every other -- the worst of both.
+[project.entry-points."presence_audit.plugins"]
 bmc = "bmc_sensor_audit.verticals.bmc:register"
 
 # An index page with no way back to the source is a dead end for the one reader

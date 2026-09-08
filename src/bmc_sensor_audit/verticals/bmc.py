@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence
 
-from ..core import vocabulary as _vocabulary
+from presence_audit import vocabulary as _vocabulary
 from . import (field_strictness, interface_divergence, name_templates,
                peer_groups, regression_rules)
 from ..inventory import sensor_types

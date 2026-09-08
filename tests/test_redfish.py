@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from bmc_sensor_audit.inventory.diff import compare
+from presence_audit.diff import compare
 from bmc_sensor_audit.inventory.entity_manager import parse_config_text
 from bmc_sensor_audit.inventory.redfish import (
     RedfishClient, order_walks, walk_chassis, walk_from_dict,

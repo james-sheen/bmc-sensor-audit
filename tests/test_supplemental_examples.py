@@ -26,11 +26,11 @@ from pathlib import Path
 
 import pytest
 
-from bmc_sensor_audit.detect.generator import generate, peer_property
-from bmc_sensor_audit.detect.supplemental import (FORMAT, load_supplemental,
+from presence_audit.generator import generate, peer_property
+from presence_audit.supplemental import (FORMAT, load_supplemental,
                                                   unmatched_names)
 from bmc_sensor_audit.inventory.entity_manager import load_declaration
-from bmc_sensor_audit.report import supplemental_as_text
+from presence_audit.report import supplemental_as_text
 
 EXAMPLES = Path(__file__).parent.parent / "examples" / "supplemental"
 MTJADE = Path(__file__).parent / "fixtures" / "upstream" / "ampere" / "mtjade.json"
@@ -94,7 +94,7 @@ class TestTheWorkedExampleRuns:
 
     def test_it_generates_a_conservation_check_on_the_right_entity(self, mtjade):
         supplemental = load_supplemental(EXAMPLES / "ampere-mtjade.json")
-        model, manifest = generate(mtjade, supplemental=supplemental)
+        model, manifest = generate(mtjade, domain_id="bmc-sensor-audit", supplemental=supplemental)
         indicators = model["domain"]["indicators"]
 
         entity = manifest.type_for("PSU0_PINPUT")

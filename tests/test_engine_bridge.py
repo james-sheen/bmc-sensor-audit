@@ -247,11 +247,12 @@ def generated(tmp_path_factory):
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "src"))
-    from bmc_sensor_audit.detect.generator import generate
+    from presence_audit.generator import generate
     from bmc_sensor_audit.inventory.entity_manager import load_declaration
 
     model, manifest = generate(
-        load_declaration([str(root / "tests" / "fixtures" / "upstream")]))
+        load_declaration([str(root / "tests" / "fixtures" / "upstream")]),
+        domain_id="bmc-sensor-audit")
     path = tmp_path_factory.mktemp("generated") / "model.yaml"
     path.write_text(yaml.safe_dump(model))
     session = EngineSession()
@@ -294,7 +295,7 @@ class TestTheGeneratedModelIsAcceptedWhole:
         negation transform, because it asserts the OUTCOME -- a fan reading below its
         declared floor is reported as below it -- and never named the mechanism.
         """
-        from bmc_sensor_audit.detect.generator import READING
+        from presence_audit.generator import READING
         _, manifest, session = generated
         sensor = next(s for s in manifest.sensors if s.lower[1] is not None)
         below = sensor.lower[1] - 0.1
@@ -323,14 +324,14 @@ class TestTheWholeStage2PathEndToEnd:
         from pathlib import Path
         root = Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(root / "src"))
-        from bmc_sensor_audit.detect.feeder import evaluate, feed
-        from bmc_sensor_audit.detect.generator import generate
-        from bmc_sensor_audit.inventory.diff import compare
+        from presence_audit.feeder import evaluate, feed
+        from presence_audit.generator import generate
+        from presence_audit.diff import compare
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
 
         declaration = load_declaration([str(root / "tests" / "fixtures" / "upstream")])
-        model, manifest = generate(declaration)
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit")
         import tempfile
         path = Path(tempfile.mkdtemp()) / "model.yaml"
         path.write_text(yaml.safe_dump(model))
@@ -361,10 +362,12 @@ class TestTheWholeStage2PathEndToEnd:
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-        from bmc_sensor_audit.detect.generator import generate
+        from presence_audit.generator import generate
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
-        _, manifest = generate(load_declaration(
-            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]))
+        _, manifest = generate(
+            load_declaration(
+            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]),
+            domain_id="bmc-sensor-audit")
         sensor = self._pick(manifest)
         midpoint = (sensor.upper[0] + sensor.lower[0]) / 2
 
@@ -377,10 +380,12 @@ class TestTheWholeStage2PathEndToEnd:
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-        from bmc_sensor_audit.detect.generator import generate
+        from presence_audit.generator import generate
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
-        _, manifest = generate(load_declaration(
-            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]))
+        _, manifest = generate(
+            load_declaration(
+            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]),
+            domain_id="bmc-sensor-audit")
         sensor = self._pick(manifest)
 
         _, _, outcome = self._run([[(sensor.declared_name, sensor.lower[1] - 0.1)]])
@@ -394,11 +399,13 @@ class TestTheWholeStage2PathEndToEnd:
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-        from bmc_sensor_audit.detect.feeder import STUCK_AT_SAMPLE_FLOOR
-        from bmc_sensor_audit.detect.generator import generate
+        from presence_audit.feeder import STUCK_AT_SAMPLE_FLOOR
+        from presence_audit.generator import generate
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
-        _, manifest = generate(load_declaration(
-            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]))
+        _, manifest = generate(
+            load_declaration(
+            [str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "upstream")]),
+            domain_id="bmc-sensor-audit")
         sensor = self._pick(manifest)
         stuck = (sensor.upper[0] + sensor.lower[0]) / 2
 
@@ -434,9 +441,9 @@ class TestTheVendoredCaptureRunsTheWholeStage2Path:
         from pathlib import Path
         root = pathlib.Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(root / "src"))
-        from bmc_sensor_audit.detect.feeder import evaluate, feed
-        from bmc_sensor_audit.detect.generator import generate
-        from bmc_sensor_audit.inventory.diff import compare
+        from presence_audit.feeder import evaluate, feed
+        from presence_audit.generator import generate
+        from presence_audit.diff import compare
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
 
@@ -448,7 +455,7 @@ class TestTheVendoredCaptureRunsTheWholeStage2Path:
         walk = walk_from_dict(json.loads(
             (root / "tests" / "fixtures" / "walk_qemu_bletchley.json").read_text()))
 
-        model, manifest = generate(declaration)
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit")
         path = pathlib.Path(tempfile.mkdtemp()) / "model.yaml"
         path.write_text(yaml.safe_dump(model))
         session = EngineSession()
@@ -610,15 +617,15 @@ class TestStuckAtAgainstRealFirmware:
         import tempfile
         root = pathlib.Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(root / "src"))
-        from bmc_sensor_audit.detect.feeder import evaluate, feed
-        from bmc_sensor_audit.detect.generator import generate
-        from bmc_sensor_audit.inventory.diff import compare
+        from presence_audit.feeder import evaluate, feed
+        from presence_audit.generator import generate
+        from presence_audit.diff import compare
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
 
         declaration = load_declaration(
             [str(root / "tests" / "fixtures" / "upstream" / "meta" / "bletchley")])
-        model, manifest = generate(declaration)
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit")
         path = pathlib.Path(tempfile.mkdtemp()) / "model.yaml"
         path.write_text(yaml.safe_dump(model))
         session = EngineSession()
@@ -746,8 +753,8 @@ class TestRedundantSignalDisagreementEndToEnd:
 
     @pytest.fixture
     def paired(self, tmp_path):
-        from bmc_sensor_audit.detect.generator import generate
-        from bmc_sensor_audit.detect.supplemental import load_supplemental
+        from presence_audit.generator import generate
+        from presence_audit.supplemental import load_supplemental
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
         path = tmp_path / "supplemental.json"
         path.write_text(json.dumps({
@@ -763,13 +770,13 @@ class TestRedundantSignalDisagreementEndToEnd:
         upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
             "fixtures" / "upstream"
         declaration = load_declaration([str(upstream)])
-        model, manifest = generate(declaration,
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit",
                                    supplemental=load_supplemental(path))
         return declaration, model, manifest
 
     def _run(self, paired, readings):
-        from bmc_sensor_audit.detect.feeder import evaluate, feed
-        from bmc_sensor_audit.inventory.diff import compare
+        from presence_audit.feeder import evaluate, feed
+        from presence_audit.diff import compare
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
         declaration, model, manifest = paired
         walk = walk_from_dict({
@@ -857,8 +864,8 @@ LOSS_MARGIN = 0.15
 @pytest.fixture
 def flowed(tmp_path):
     """The vendored Mt.Jade declaration, generated with a declared PSU flow."""
-    from bmc_sensor_audit.detect.generator import generate
-    from bmc_sensor_audit.detect.supplemental import load_supplemental
+    from presence_audit.generator import generate
+    from presence_audit.supplemental import load_supplemental
     from bmc_sensor_audit.inventory.entity_manager import load_declaration
     path = tmp_path / "supplemental.json"
     path.write_text(json.dumps({
@@ -873,7 +880,7 @@ def flowed(tmp_path):
     upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
         "fixtures" / "upstream"
     declaration = load_declaration([str(upstream)])
-    model, manifest = generate(declaration, supplemental=load_supplemental(path))
+    model, manifest = generate(declaration, domain_id="bmc-sensor-audit", supplemental=load_supplemental(path))
     return declaration, model, manifest
 
 
@@ -891,8 +898,8 @@ class TestConservationEndToEnd:
     MARGIN = LOSS_MARGIN
 
     def _run(self, flowed, pin_watts, pout_watts, samples=12, drift=0.01):
-        from bmc_sensor_audit.detect.feeder import evaluate, feed
-        from bmc_sensor_audit.inventory.diff import compare
+        from presence_audit.feeder import evaluate, feed
+        from presence_audit.diff import compare
         from bmc_sensor_audit.inventory.redfish import walk_from_dict
         declaration, model, manifest = flowed
         reports = []
@@ -968,7 +975,7 @@ class TestConservationEndToEnd:
     def test_a_genuinely_unread_property_is_still_reported(self, flowed):
         """Non-vacuity for the filter above: it excludes peers this model declares,
         by (entity, property) pair, and nothing else."""
-        from bmc_sensor_audit.detect.feeder import evaluate
+        from presence_audit.feeder import evaluate
         _, _, manifest = flowed
         entity = manifest.type_for("PSU0_PINPUT")
         describe = {"unconsumed_observations": [
@@ -1040,7 +1047,7 @@ class TestTheZeroInputDeclineArrivedInsideThePin:
     def test_strict_declines_still_reaches_it(self):
         """The flag means *tell me about everything that could not be judged*, and a
         bucket it could not reach would be a hole in the one thing it promises."""
-        from bmc_sensor_audit.detect.feeder import DetectOutcome
+        from presence_audit.feeder import DetectOutcome
 
         outcome = DetectOutcome(strict=True)
         outcome.inapplicable_declines.append("PSU0 [CONSERVATION] not_applicable")
@@ -1147,7 +1154,7 @@ class TestTheAttestationArtifact:
     def test_a_problem_type_the_engine_will_not_attest_is_recorded(self, tmp_path):
         """Not dropped. An artifact that silently omits what it could not attest
         claims a completeness it does not have."""
-        from bmc_sensor_audit.detect.attestation import build_attestation
+        from presence_audit.attestation import build_attestation
 
         class _Refusing:
             def to_dict(self):
@@ -1194,12 +1201,12 @@ class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
     def run_over_the_corpus(tmp_path_factory):
         import time
 
-        from bmc_sensor_audit.detect.generator import generate
+        from presence_audit.generator import generate
         from bmc_sensor_audit.inventory.entity_manager import load_declaration
         upstream = pathlib.Path(__file__).resolve().parents[1] / "tests" / \
             "fixtures" / "upstream"
         declaration = load_declaration([str(upstream)])
-        model, manifest = generate(declaration)
+        model, manifest = generate(declaration, domain_id="bmc-sensor-audit")
         path = tmp_path_factory.mktemp("scale") / "model.yaml"
         path.write_text(yaml.safe_dump(model))
 

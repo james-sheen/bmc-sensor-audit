@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from bmc_sensor_audit.inventory import sensor_types as st  # noqa: E402
-from bmc_sensor_audit.inventory.diff import compare  # noqa: E402
+from presence_audit.diff import compare  # noqa: E402
 from bmc_sensor_audit.inventory.entity_manager import load_declaration  # noqa: E402
 from bmc_sensor_audit.inventory.redfish import walk_from_dict  # noqa: E402
 

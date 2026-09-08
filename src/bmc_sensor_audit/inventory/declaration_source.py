@@ -53,7 +53,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
-from .diff import normalise_name
+from presence_audit.diff import normalise_name
 from .entity_manager import Declaration, DeclaredSensor, Threshold
 
 __all__ = ["DeclarationSource", "DeclarationSourceError", "PDR_FORMAT",

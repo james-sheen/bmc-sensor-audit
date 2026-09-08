@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from bmc_sensor_audit.core import plugins, vocabulary
-from bmc_sensor_audit.core.vocabulary import PluginError, VocabularyNotRegistered
+from presence_audit import plugins, vocabulary
+from presence_audit.vocabulary import PluginError, VocabularyNotRegistered
 from bmc_sensor_audit.inventory import sensor_types
 from bmc_sensor_audit.verticals import bmc
 
@@ -42,7 +42,7 @@ class TestAnEmptyRegistryRefuses:
         with pytest.raises(VocabularyNotRegistered) as caught:
             vocabulary.current()
         message = str(caught.value)
-        assert "bmc_sensor_audit.plugins" in message, "the refusal does not say where a vocabulary comes from"
+        assert "presence_audit.plugins" in message, "the refusal does not say where a vocabulary comes from"
         assert "--plugin" in message
 
     def test_no_entry_points_leaves_it_empty_rather_than_defaulting(self):
@@ -57,7 +57,11 @@ class TestAnEmptyRegistryRefuses:
 class TestTheBundledVerticalGoesThroughTheDoor:
     def test_the_entry_point_is_declared_for_it(self):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert '[project.entry-points."bmc_sensor_audit.plugins"]' in text, (
+        # The group belongs to the package that owns the registry, which is
+        # `presence-audit` now. Declaring under this distribution's own name
+        # would keep working for this one vertical and be invisible to the
+        # loader every other vertical uses.
+        assert '[project.entry-points."presence_audit.plugins"]' in text, (
             "the bundled vertical has no entry point, so an installed consumer "
             "reaches it only by importing it directly")
         assert re.search(r'^bmc\s*=\s*"bmc_sensor_audit\.verticals\.bmc:register"',

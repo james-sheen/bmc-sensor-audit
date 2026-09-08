@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import List, Sequence
 
 from ..inventory.redfish import LiveSensor, Walk
-from ..inventory.regression import Change
+from presence_audit.regression import Change
 
 
 def same_point(old: LiveSensor, new: LiveSensor) -> bool:

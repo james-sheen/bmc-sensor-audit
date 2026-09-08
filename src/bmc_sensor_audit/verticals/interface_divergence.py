@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from ..inventory.diff import Finding
+from presence_audit.diff import Finding
 from ..inventory.redfish import Walk
 
 

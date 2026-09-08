@@ -114,8 +114,8 @@ runs:
         # without `insecure` is the ordinary way to meet that, and `insecure`
         # exists in this file because BMCs ship self-signed certificates.
         case "$BSA_MODE" in
-          detect)   spec='bmc-sensor-audit[detect]>=0.2.2,<0.3' ;;
-          coverage) spec='bmc-sensor-audit>=0.2.2,<0.3' ;;
+          detect)   spec='bmc-sensor-audit[detect]>=0.3.0,<0.4' ;;
+          coverage) spec='bmc-sensor-audit>=0.3.0,<0.4' ;;
           *) echo "::error::mode must be detect or coverage, not '$BSA_MODE'"; exit 2 ;;
         esac
         python3 -m pip install --quiet --upgrade pip

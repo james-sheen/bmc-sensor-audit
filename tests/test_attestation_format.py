@@ -27,7 +27,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from bmc_sensor_audit.detect.attestation import (  # noqa: E402
+from presence_audit.attestation import (  # noqa: E402
     ATTESTATION_FORMAT, build_attestation, validate_attestation)
 
 MANUAL = ROOT / "docs" / "attestation-format.md"
@@ -231,7 +231,7 @@ class TestTheCommandLine:
         path.write_text(json.dumps(artifact))
         probe = subprocess.run(
             [sys.executable, "-c",
-             "import bmc_sensor_audit.detect.attestation as m; "
+             "import presence_audit.attestation as m; "
              "import sys; sys.exit(0 if 'arbiter_engine' not in sys.modules else 1)"],
             capture_output=True, text=True,
             env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin",
@@ -255,13 +255,13 @@ class TestTheArtifactsGapsReachTheTerminal:
     """
 
     def test_nothing_is_printed_when_everything_was_attested(self):
-        from bmc_sensor_audit.report import unattested_notice
+        from presence_audit.report import unattested_notice
 
         assert unattested_notice({"unattested": []}, "cert.json") == ""
         assert unattested_notice({}, "cert.json") == ""
 
     def test_each_declined_problem_type_is_named_with_its_reason(self):
-        from bmc_sensor_audit.report import unattested_notice
+        from presence_audit.report import unattested_notice
 
         notice = unattested_notice(
             {"unattested": ["threshold_exceeded: no attestation record",

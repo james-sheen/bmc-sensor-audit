@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from bmc_sensor_audit.inventory.diff import compare
+from presence_audit.diff import compare
 from bmc_sensor_audit.inventory.entity_manager import parse_config_text
 from bmc_sensor_audit.inventory.redfish import Walk, read_sensor_object
 
