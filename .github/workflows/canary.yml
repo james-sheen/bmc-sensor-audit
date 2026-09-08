@@ -42,7 +42,9 @@ jobs:
         # range is what gets tested.
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet "arbiter-engine>=0.1.8,<0.2" pytest
+          # Runtime dependencies too: this job does not install the package
+          # either, and the suite imports the vertical, which imports them.
+          python3 -m pip install --quiet "arbiter-engine>=0.1.8,<0.2" pytest $(python3 tools/runtime_deps.py)
           echo "resolved:"
           python3 -m pip show arbiter-engine | sed -n 's/^Version: /  arbiter-engine /p'
 

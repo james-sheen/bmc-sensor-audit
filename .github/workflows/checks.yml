@@ -52,7 +52,12 @@ jobs:
         # PYTHONPATH stays a real negative.
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet pyyaml pytest
+          # The package itself stays UNINSTALLED on purpose -- see the note
+          # above -- but its runtime dependencies must be present or the suite
+          # cannot even collect. Derived from pyproject rather than repeated
+          # here, so the range that binds and the range CI installs cannot
+          # drift apart.
+          python3 -m pip install --quiet pyyaml pytest $(python3 tools/runtime_deps.py)
           python3 -m pytest tests/ -q
 
   checks:
@@ -148,7 +153,12 @@ jobs:
         # it exists to run.
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet pyyaml pytest
+          # The package itself stays UNINSTALLED on purpose -- see the note
+          # above -- but its runtime dependencies must be present or the suite
+          # cannot even collect. Derived from pyproject rather than repeated
+          # here, so the range that binds and the range CI installs cannot
+          # drift apart.
+          python3 -m pip install --quiet pyyaml pytest $(python3 tools/runtime_deps.py)
           python3 -m pytest tests/ -q
 
       - name: The documented console-script path, from a clean checkout
