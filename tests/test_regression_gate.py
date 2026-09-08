@@ -300,11 +300,17 @@ class TestTheVocabularyStaysWhole:
         return kinds
 
     def test_every_kind_is_ranked_and_has_a_headline(self):
-        from presence_audit.report import CHANGE_ORDER, _CHANGE_HEADLINE
+        # `change_headlines()` was the module constant `_CHANGE_HEADLINE` until
+        # the core learned to phrase its report in the registered domain's noun.
+        # A headline carrying a noun cannot be a dict built at import time,
+        # because the vertical registers afterwards -- so it became a function,
+        # and a public one, since this test was already reaching past the
+        # underscore to ask a question the core owns.
+        from presence_audit.report import CHANGE_ORDER, change_headlines
 
         emitted = self._emitted()
         assert emitted - set(CHANGE_ORDER) == set(), "unranked kinds sort last silently"
-        assert emitted - set(_CHANGE_HEADLINE) == set(), "kinds with no headline"
+        assert emitted - set(change_headlines()) == set(), "kinds with no headline"
 
     def test_nothing_is_ranked_that_cannot_be_emitted(self):
         """The other direction. A stale entry is not dangerous, but it is a claim

@@ -31,6 +31,28 @@ class BmcVocabulary:
         return {sensor_types.NOT_A_SENSOR: "not_a_sensor",
                 sensor_types.UNRECOGNISED: "unrecognised_type"}
 
+    @property
+    def noun(self) -> Sequence[str]:
+        """What this domain calls one of them. The core used to spell this word
+        into forty of its own sentences; now it asks."""
+        return ("sensor", "sensors")
+
+    def count_labels(self) -> Mapping[str, Sequence[str]]:
+        """The label and the parenthetical for each key above.
+
+        These sentences lived in the core's report until the core stopped
+        knowing what a sensor was. They say something only a BMC audit means --
+        which is the same reason the keys themselves are declared here.
+        """
+        return {
+            "not_a_sensor": (
+                "not sensors",
+                "PID loops, EEPROMs, firmware, muxes -- cannot report a reading"),
+            "unrecognised_type": (
+                "type unrecognised",
+                "not classified either way; NOT counted as absent"),
+        }
+
     def classify(self, declared_type: Optional[str]) -> str:
         return sensor_types.classify(declared_type)
 
