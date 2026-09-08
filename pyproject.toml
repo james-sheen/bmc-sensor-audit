@@ -38,7 +38,14 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # extracted by IMPORT GRAPH -- every module in it reaches nothing BMC -- and it
 # is a hard dependency rather than an extra because Stage 1 cannot run without
 # it. Its own dependency list is empty, so this adds no transitive weight.
-dependencies = ["presence-audit>=0.1.0,<0.2"]
+# THE FLOOR IS 0.1.2 BECAUSE THAT IS WHERE THE CLAIM STARTS BEING TRUE. This
+# package's vertical now supplies the nouns the core used to spell, and the core
+# only asks for them from 0.1.2. Below that the words come back unused and the
+# report prints `sensor` because it was written into shared code -- so a
+# `>=0.1.0` floor would install a combination whose whole point does not work.
+# It was MEASURED, not chosen: CI on 0.1.1 fails importing `change_headlines`,
+# which does not exist there.
+dependencies = ["presence-audit>=0.1.2,<0.2"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
