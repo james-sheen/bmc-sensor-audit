@@ -21,12 +21,20 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.0**, tagged `v0.3.0`, Apache-2.0, on PyPI as
+**Released — 0.3.1**, tagged `v0.3.1`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
-**0.3.0 is a split, and it is why this is a major bump.** Everything that was
+**0.3.1 tells the core what a sensor is called.** `presence-audit` 0.1.2 stopped
+spelling one domain's nouns into its shared report and started asking the
+registered vertical for them. This package now answers, so its report reads as it
+always has. **Upgrade if you are on 0.3.0**: that release names no noun, its
+dependency range admits 0.1.2, and the pair prints `Point coverage` where every
+earlier version printed `Sensor coverage`. The floor moves to `>=0.1.2` for the
+same reason — below it the words are supplied and never asked for.
+
+**0.3.0 is a split, and it is why that was a major bump.** Everything that was
 never about a BMC — the protocol a vertical is written against, the three-valued
 presence diff, the regression gate, the report, the model generator and the
 attestation — is now `presence-audit`, a separate distribution with no
