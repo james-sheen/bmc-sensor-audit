@@ -230,3 +230,77 @@ class TestTwoInstalledVerticalsAreRefusedRatherThanRanked:
                          entry_points=False, environment=False)
         assert vocabulary.current().kinds == sensor_types.KINDS
 
+
+class TestTheEnvironmentVariableCanNameACallable:
+    """A spec naming a callable, through the variable. It could not be done.
+
+    `core/plugins.py` said the variable is `os.pathsep`-separated AND that a spec
+    may be `module:callable`. On POSIX `os.pathsep` is `:`, so the two sentences
+    were jointly false: any spec naming a callable was split down the middle and
+    the loader reported `No module named 'register'` -- an error about the half
+    it was handed rather than about the separator. Nothing was red, because every
+    test of this path used the bare form, which is exactly why the documented
+    capability had never been exercised.
+    """
+
+    def test_a_spec_with_an_explicit_callable_survives(self, monkeypatch):
+        monkeypatch.setenv(plugins.ENVIRONMENT_VARIABLE,
+                           "bmc_sensor_audit.verticals.bmc:register")
+        plugins.load_all(entry_points=False)
+        assert vocabulary.current().kinds == sensor_types.KINDS
+
+    def test_the_bare_form_still_works(self, monkeypatch):
+        """Non-vacuity in the other direction: the form that DID work must not
+        have been traded for the form that did not."""
+        monkeypatch.setenv(plugins.ENVIRONMENT_VARIABLE,
+                           "bmc_sensor_audit.verticals.bmc")
+        plugins.load_all(entry_points=False)
+        assert vocabulary.current().kinds == sensor_types.KINDS
+
+    def test_a_wrong_callable_still_fails_by_name(self, monkeypatch):
+        """The rejoin must not swallow a real error into a confusing one."""
+        monkeypatch.setenv(plugins.ENVIRONMENT_VARIABLE,
+                           "bmc_sensor_audit.verticals.bmc:nosuchthing")
+        with pytest.raises(PluginError, match="nosuchthing"):
+            plugins.load_all(entry_points=False)
+
+
+class TestTheSpecGrammarSplitsFromTheRight:
+    @pytest.mark.parametrize("spec, target, attribute", [
+        ("mod.a", "mod.a", "register"),
+        ("mod.a:go", "mod.a", "go"),
+        ("pkg.sub.mod:register", "pkg.sub.mod", "register"),
+        ("walk.py", "walk.py", "register"),
+        ("walk.py:go", "walk.py", "go"),
+        # The reason the split is from the right rather than the left. Splitting
+        # from the left made the drive letter the module; splitting from the
+        # right without the identifier guard would make `\\walk.py` the callable.
+        (r"C:\walk.py", r"C:\walk.py", "register"),
+        (r"C:\walk.py:go", r"C:\walk.py", "go"),
+    ])
+    def test_split(self, spec, target, attribute):
+        assert plugins.split_spec(spec) == (target, attribute)
+
+    @pytest.mark.parametrize("value, specs", [
+        ("a.mod", ["a.mod"]),
+        ("a.mod:register", ["a.mod:register"]),
+        ("a.mod:register:b.mod:register", ["a.mod:register", "b.mod:register"]),
+        ("a.mod:b.mod", ["a.mod", "b.mod"]),
+        ("dir/walk.py:register", ["dir/walk.py:register"]),
+        ("", []),
+    ])
+    def test_environment_value(self, value, specs, monkeypatch):
+        monkeypatch.setattr(plugins.os, "pathsep", ":")
+        assert plugins.environment_specs(value) == specs
+
+    def test_the_one_pair_the_grammar_cannot_tell_apart(self, monkeypatch):
+        """Recorded as a test so the limit is a measurement, not a caveat.
+
+        Two DOTLESS module names cannot be told from one module and a callable
+        when the separator IS the callable marker. Documented in
+        `environment_specs`; `--plugin` twice is the way to say it. If this ever
+        starts returning two specs, that docstring is wrong and must move too.
+        """
+        monkeypatch.setattr(plugins.os, "pathsep", ":")
+        assert plugins.environment_specs("alpha:beta") == ["alpha:beta"]
+

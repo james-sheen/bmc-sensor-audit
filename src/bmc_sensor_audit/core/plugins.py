@@ -8,7 +8,10 @@ Three ways in, all resolved before anything is read:
 
 - an entry point in the group `bmc_sensor_audit.plugins` (this package declares
   one for the vertical it ships);
-- `BMC_SENSOR_AUDIT_PLUGINS`, an `os.pathsep`-separated list of specs;
+- `BMC_SENSOR_AUDIT_PLUGINS`, an `os.pathsep`-separated list of specs -- and on
+  POSIX that separator is `:`, the same character that introduces a callable, so
+  the list is reassembled from the right. `environment_specs` has the rule and
+  the one pair it cannot tell apart;
 - `--plugin SPEC`, repeatable.
 
 A spec is `module.path`, `module.path:callable`, or `path/to/file.py[:callable]`.
@@ -64,10 +67,34 @@ def _call(register, spec: str, origin: str) -> Loaded:
     return Loaded(origin=origin, spec=spec, said=str(said) if said else "")
 
 
+def _is_callable_name(word: str) -> bool:
+    """Whether a fragment after a colon is a callable name rather than a path.
+
+    A Python attribute is always an identifier; a path fragment almost never is.
+    That is the whole discriminator, and it is what lets the split below happen
+    from the RIGHT without eating a Windows drive letter: `C:\\walk.py` rsplits
+    into `C` and `\\walk.py`, and `\\walk.py` is not an identifier, so the spec
+    stays whole.
+    """
+    return word.isidentifier() and not word.endswith(".py")
+
+
+def split_spec(spec: str) -> tuple:
+    """`module[:callable]` -> `(module, callable)`, splitting from the RIGHT.
+
+    Public because the environment parser below has to agree with it exactly,
+    and two functions splitting one grammar differently is how the two halves of
+    this module disagreed in the first place.
+    """
+    head, sep, tail = spec.rpartition(":")
+    if sep and _is_callable_name(tail):
+        return head, tail
+    return spec, "register"
+
+
 def load_spec(spec: str, origin: str = "--plugin") -> Loaded:
     """Resolve one spec to a callable and call it."""
-    target, _, attribute = spec.partition(":")
-    attribute = attribute or "register"
+    target, attribute = split_spec(spec)
     if target.endswith(".py"):
         path = Path(target)
         if not path.is_file():
@@ -90,6 +117,36 @@ def load_spec(spec: str, origin: str = "--plugin") -> Loaded:
     if not hasattr(module, attribute):
         raise PluginError(f"{origin}: {target} has no {attribute!r}")
     return _call(getattr(module, attribute), spec, origin)
+
+
+def environment_specs(value: str) -> List[str]:
+    """The environment variable's value -> the specs it names.
+
+    `os.pathsep` separates them, and on POSIX `os.pathsep` IS `:` -- the same
+    character that introduces a callable. So splitting on it alone destroyed
+    every spec that named one: `mod:register` became the two specs `mod` and
+    `register`, and the loader reported `No module named 'register'`, an error
+    naming the half it was handed rather than the reason.
+
+    Resolved by reassembling FROM THE RIGHT: a fragment that is a bare callable
+    name belongs to the fragment before it. `a:register:b:register` is two
+    specs, `a:b` is two specs, `a:register` is one.
+
+    WHAT THIS CANNOT EXPRESS, on a platform where `os.pathsep` is `:`. Two
+    modules whose names carry no dot -- `alpha:beta` -- read as `beta` in
+    `alpha`, because nothing distinguishes that from a callable. The ambiguity
+    is in the grammar rather than in this function: one character cannot both
+    separate specs and introduce a callable. Name such a pair with `--plugin`
+    twice instead. Measured over the shapes this project actually uses, it is
+    the only case that does not resolve.
+    """
+    specs: List[str] = []
+    for part in filter(None, value.split(os.pathsep)):
+        if specs and _is_callable_name(part):
+            specs[-1] = f"{specs[-1]}:{part}"
+        else:
+            specs.append(part)
+    return specs
 
 
 def load_all(explicit: Iterable[str] = (), *, entry_points: bool = True,
@@ -133,7 +190,7 @@ def load_all(explicit: Iterable[str] = (), *, entry_points: bool = True,
             f"Choose with --plugin SPEC, or add --no-entry-points and name it, "
             f"or uninstall the one you did not mean")
     if environment:
-        for spec in filter(None, os.environ.get(ENVIRONMENT_VARIABLE, "").split(os.pathsep)):
+        for spec in environment_specs(os.environ.get(ENVIRONMENT_VARIABLE, "")):
             loaded.append(load_spec(spec, ENVIRONMENT_VARIABLE))
     for spec in explicit:
         loaded.append(load_spec(spec))
