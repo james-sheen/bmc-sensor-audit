@@ -21,10 +21,23 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.2.5**, tagged `v0.2.5`, Apache-2.0, on PyPI as
+**Released — 0.2.6**, tagged `v0.2.6`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.2.6 makes the published protocol the whole contract.** `core/protocols.py`
+is the document an outside vertical is written against, and it was narrower than
+what the code required: the diff and the regression gate iterated the capture and
+the declaration instead of reading `.points`, so an adapter implementing every
+member the protocol declares — and nothing more — could not run. Eight call sites
+now read `.points`. The bundled vertical never noticed, because this domain's own
+types are iterable for reasons of their own.
+
+Two verticals installed at once are now refused rather than ranked. Registration
+replaces, so the later entry point silently won and every classification, count
+key and finding came from a domain the caller was not auditing. Nothing said so.
+Choose one with `--plugin`, the environment variable, or `--no-entry-points`.
 
 **0.2.5 separates the machinery from the domain.** The presence diff, the
 regression gate, the report and the engine feed are typed on protocols rather
