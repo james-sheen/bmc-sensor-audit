@@ -7,6 +7,12 @@ protocols, driven through the same `compare()` the presence audit is written in.
 This is the measurement the neutral-core work exists to produce. If it stops
 passing, the core has stopped being shared and is only this domain's code with
 an indirection.
+
+The stand-ins below implement the published protocols and NOTHING ELSE -- no
+`__iter__`, no `__len__`, no convenience the concrete BMC types happen to have.
+That is the point of them. A fixture that adds a member to get past a call site
+proves the core can serve a domain that already knows what the document does not
+say, which is not the claim.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bmc_sensor_audit.core import protocols as P
 from bmc_sensor_audit.core import vocabulary as V
 from bmc_sensor_audit.inventory.diff import compare
+from bmc_sensor_audit.inventory.regression import compare_walks
 
 KINDS = ("point", "not_a_point", "unrecognised")
 
@@ -52,8 +59,10 @@ class _C:                                    # the capture
     captured_at = property(lambda s: s._t[-1] if s._t else None)
     complete = property(lambda s: bool(s._i))
     errors = property(lambda s: ())
-    def __iter__(s): return iter(s.points)          # compare() iterates the walk
-    def __len__(s): return len(s._i)
+    # No `__iter__`, no `__len__`. This class is exactly `protocols.Capture` and
+    # nothing else, because the protocol is the whole contract an outside domain
+    # is given. Adding a member here to make a call site work would move the
+    # requirement somewhere no reader of the protocol can find it.
 
 
 class _D:                                    # a declared tag
@@ -77,7 +86,7 @@ class _DS:                                   # the declaration
     sources = property(lambda s: ("register.yaml",))
     anomalies = property(lambda s: ())
     unreadable = property(lambda s: ())
-    def __iter__(s): return iter(s.points)
+    # Exactly `protocols.DeclarationSource`, for the reason above.
 
 
 class FactoryLineVocabulary:
@@ -112,6 +121,18 @@ REGISTER = {"assets": [{"id": "line1", "type": "mill", "tags": {
     "retired": {"node": "line1.retired", "class": "speed", "excluded": True}}}]}
 
 V.reset(); V.register(FactoryLineVocabulary())
+
+
+@pytest.fixture
+def factory_line_registered():
+    """The vocabulary alone, for tests that drive an entry point themselves."""
+    previous = V._REGISTERED
+    V.reset()
+    V.register(FactoryLineVocabulary())
+    try:
+        yield
+    finally:
+        V._REGISTERED = previous
 
 
 @pytest.fixture
@@ -167,3 +188,38 @@ class TestTheCoreServesADomainItWasNotWrittenFor:
         assert not extra, (
             f"the foreign adapter offers non-protocol members {sorted(extra)}, "
             f"so this file proves less than it claims")
+
+
+class TestTheProtocolIsTheWholeContract:
+    """Every neutral entry point, driven by stand-ins that are ONLY the protocol.
+
+    `compare()` has the foreign-domain suite above. `compare_walks()` had
+    nothing: it is in the same neutral band, takes the same `Capture`, and no
+    test drove it with anything but the concrete BMC walk -- which carries
+    members the protocol does not declare, so it could not have noticed needing
+    them. A band is claimed neutral per module; it has to be checked per module.
+    """
+
+    def test_compare_reads_points_on_both_arguments(self, factory_line_registered):
+        report = compare(_DS(REGISTER), _C(WALK))
+        assert report.counts()["declared"] > 0, (
+            "a declaration implementing exactly the protocol produced nothing")
+
+    def test_compare_walks_reads_points_on_both_captures(self, factory_line_registered):
+        report = compare_walks(_C(WALK), _C(WALK))
+        assert report.before_count == report.after_count == len(_C(WALK).points)
+        assert report.before_count > 0, "the fixture cannot refute anything empty"
+
+    @pytest.mark.parametrize("member", ["__iter__", "__len__"])
+    def test_the_stand_ins_really_lack_the_members_the_concrete_types_have(self, member):
+        """The assertion the two tests above are only meaningful because of.
+
+        If a later edit adds either member back to these stand-ins for
+        convenience, both tests keep passing while testing nothing, and the
+        requirement moves back somewhere no reader of the protocol can find it.
+        """
+        for cls in (_C, _DS):
+            assert not hasattr(cls, member), (
+                f"{cls.__name__} defines {member}, which `core/protocols.py` does "
+                f"not declare -- so these tests no longer measure the protocol")
+

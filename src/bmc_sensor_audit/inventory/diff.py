@@ -138,7 +138,7 @@ def normalise_name(name: str) -> str:
 def _index_live(walk: Capture) -> tuple[dict[str, CapturedPoint], dict[str, CapturedPoint]]:
     exact: dict[str, CapturedPoint] = {}
     normalised: dict[str, CapturedPoint] = {}
-    for sensor in walk:
+    for sensor in walk.points:
         exact.setdefault(sensor.name, sensor)
         normalised.setdefault(normalise_name(sensor.name), sensor)
     return exact, normalised
@@ -174,7 +174,7 @@ def _pair(declaration: Iterable[DeclaredPoint], walk: Capture) -> tuple[list[Mat
         pattern = _vocabulary.current().template_pattern(declared.name)
         hit = None
         if pattern is not None:
-            for sensor in walk:
+            for sensor in walk.points:
                 if sensor.path not in claimed and pattern.match(sensor.name):
                     hit = sensor
                     break
@@ -281,10 +281,13 @@ def compare(declaration: DeclarationSource, walk: Capture, *,
     # sensor that is absent is not a finding, and one that is live is a finding
     # of its own -- the configuration and the machine disagree about whether that
     # hardware is switched on.
-    all_matches, unmatched_declared = _pair(list(declaration), walk)
+    # `.points` on both, never iteration of the object itself. The protocol is
+    # the whole contract a second bridge gets: anything this module needs that
+    # the protocol does not declare is a requirement nobody outside can discover.
+    all_matches, unmatched_declared = _pair(list(declaration.points), walk)
     matched_paths = {m.live.path for m in all_matches}
     report.matches = all_matches
-    report.unmatched_live = [s for s in walk if s.path not in matched_paths]
+    report.unmatched_live = [s for s in walk.points if s.path not in matched_paths]
 
     if not include_disabled_in_config:
         unmatched_declared = [s for s in unmatched_declared if not s.disabled]

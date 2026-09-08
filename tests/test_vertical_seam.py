@@ -147,3 +147,86 @@ class TestTheCliTreatsItAsARefusal:
         from bmc_sensor_audit import cli
         text = cli.build_parser().format_help()
         assert "--plugin" in text and "--no-entry-points" in text
+
+
+class _Point:
+    """An entry point, as `load_all` consumes one."""
+
+    def __init__(self, name, value, register):
+        self.name, self.value, self._r = name, value, register
+
+    def load(self):
+        return self._r
+
+
+def _vocab(word):
+    class _V:
+        kinds = (word,)
+        count_keys: dict = {}
+        def classify(self, t): return word
+        def is_auditable(self, kind): return True
+        def is_expected_live(self, t): return True
+        def template_pattern(self, name): return None
+        def same_point(self, old, new): return True
+        def captures_comparable(self, before, after): return False
+        def point_changes(self, old, new, *, comparable=False): return ()
+        def capture_changes(self, before, after): return ()
+        def capture_findings(self, capture): return ()
+        def peer_groups(self, declaration): return ()
+        def report_sections(self): return {}
+    return _V
+
+
+class TestTwoInstalledVerticalsAreRefusedRatherThanRanked:
+    """The failure a second vertical makes possible, and only a second one.
+
+    With one vertical installed nothing here can go wrong, which is why it
+    survived the neutral-core work and a release: `register()` overwrites, so
+    two entry points meant the later one silently won and every verdict of the
+    other domain's audit changed with no line of output saying so. Found by
+    installing a real second vertical alongside the bundled one.
+    """
+
+    @pytest.fixture
+    def two_installed(self, monkeypatch):
+        points = [_Point("alpha", "alpha.mod:register",
+                         lambda: vocabulary.register(_vocab("a")())),
+                  _Point("beta", "beta.mod:register",
+                         lambda: vocabulary.register(_vocab("b")()))]
+        monkeypatch.setattr(plugins, "_entry_points", lambda: points)
+        return points
+
+    def test_two_entry_points_refuse(self, two_installed):
+        with pytest.raises(PluginError) as raised:
+            plugins.load_all(environment=False)
+        message = str(raised.value)
+        assert "alpha.mod:register" in message and "beta.mod:register" in message, (
+            f"the refusal must name both, or the reader cannot act on it: {message}")
+
+    def test_one_entry_point_still_loads(self, two_installed, monkeypatch):
+        """Non-vacuity. A refusal that fires on one vertical would be worse than
+        the defect it replaces."""
+        monkeypatch.setattr(plugins, "_entry_points", lambda: two_installed[:1])
+        loaded = plugins.load_all(environment=False)
+        assert len(loaded) == 1
+        assert vocabulary.current().kinds == ("a",)
+
+    def test_an_explicit_plugin_resolves_it(self, two_installed):
+        """The refusal names three ways out; this is the one it names first, and
+        an unresolvable refusal would just be a wall."""
+        loaded = plugins.load_all(["bmc_sensor_audit.verticals.bmc:register"],
+                                  environment=False)
+        assert vocabulary.current().kinds == sensor_types.KINDS
+        assert len(loaded) == 3
+
+    def test_the_environment_resolves_it_too(self, two_installed, monkeypatch):
+        monkeypatch.setenv(plugins.ENVIRONMENT_VARIABLE,
+                           "bmc_sensor_audit.verticals.bmc")
+        plugins.load_all()
+        assert vocabulary.current().kinds == sensor_types.KINDS
+
+    def test_no_entry_points_sidesteps_it(self, two_installed):
+        plugins.load_all(["bmc_sensor_audit.verticals.bmc:register"],
+                         entry_points=False, environment=False)
+        assert vocabulary.current().kinds == sensor_types.KINDS
+

@@ -94,8 +94,23 @@ def load_spec(spec: str, origin: str = "--plugin") -> Loaded:
 
 def load_all(explicit: Iterable[str] = (), *, entry_points: bool = True,
              environment: bool = True) -> List[Loaded]:
-    """Load every vertical from every enabled source, and say what loaded."""
+    """Load every vertical from every enabled source, and say what loaded.
+
+    Precedence is deliberate and is the order below: entry points first, then
+    the environment, then `--plugin`. Each registration REPLACES the last, so a
+    later source wins -- which is what makes an explicit `--plugin` able to
+    override whatever happens to be installed.
+
+    TWO ENTRY POINTS ARE REFUSED, and that is the one case the ordering cannot
+    resolve. Installing a second vertical is how a domain arrives, so it is not
+    an error; but two of them offer two answers to *what kind of thing is this*
+    and nothing in the installation says which was meant. Silently keeping
+    whichever `importlib` happened to yield last would change every verdict of
+    the other vertical's audit, with no line of output saying so. An explicit
+    selection resolves it, so the refusal names how.
+    """
     loaded: List[Loaded] = []
+    from_entry_points: List[Loaded] = []
     if entry_points:
         for point in _entry_points():
             try:
@@ -104,7 +119,19 @@ def load_all(explicit: Iterable[str] = (), *, entry_points: bool = True,
                 raise PluginError(
                     f"entry point {point.name!r} ({point.value}) could not be "
                     f"loaded: {type(error).__name__}: {error}") from error
-            loaded.append(_call(register, point.value, f"entry point {point.name}"))
+            one = _call(register, point.value, f"entry point {point.name}")
+            from_entry_points.append(one)
+            loaded.append(one)
+    resolved = bool(explicit) or (
+        environment and os.environ.get(ENVIRONMENT_VARIABLE, "").strip())
+    if len(from_entry_points) > 1 and not resolved:
+        names = ", ".join(sorted(one.spec for one in from_entry_points))
+        raise PluginError(
+            f"{len(from_entry_points)} verticals are installed and offer a "
+            f"vocabulary: {names}. Only one can be in force, and nothing here "
+            f"says which you meant -- so this refuses rather than picking. "
+            f"Choose with --plugin SPEC, or add --no-entry-points and name it, "
+            f"or uninstall the one you did not mean")
     if environment:
         for spec in filter(None, os.environ.get(ENVIRONMENT_VARIABLE, "").split(os.pathsep)):
             loaded.append(load_spec(spec, ENVIRONMENT_VARIABLE))

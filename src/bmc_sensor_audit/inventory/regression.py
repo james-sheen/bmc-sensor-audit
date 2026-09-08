@@ -115,7 +115,7 @@ def _index(walk: Capture) -> tuple[dict[str, CapturedPoint], dict[str, CapturedP
     """
     by_name: dict[str, CapturedPoint] = {}
     by_path: dict[str, CapturedPoint] = {}
-    for sensor in walk:
+    for sensor in walk.points:
         by_name.setdefault(sensor.name, sensor)
         by_path.setdefault(sensor.path, sensor)
     return by_name, by_path
@@ -239,8 +239,8 @@ def _pair(before: Capture, after: Capture,
         claimed_before.add(id(old))
         claimed_after.add(id(new))
 
-    gone = [s for s in before if id(s) not in claimed_before]
-    arrived = [s for s in after if id(s) not in claimed_after]
+    gone = [s for s in before.points if id(s) not in claimed_before]
+    arrived = [s for s in after.points if id(s) not in claimed_after]
     return pairs, gone, arrived, prefixed
 
 
@@ -343,7 +343,7 @@ def compare_walks(before: Capture, after: Capture, *,
     `prefix_map` is the operator's declared aggregation-prefix map, `(old, new)`
     pairs. Empty is the normal case and changes nothing.
     """
-    report = RegressionReport(before_count=len(before), after_count=len(after),
+    report = RegressionReport(before_count=len(before.points), after_count=len(after.points),
                               complete=before.complete and after.complete,
                               fields_comparable=_vocabulary.current().captures_comparable(before, after))
     changes: list[Change] = []
