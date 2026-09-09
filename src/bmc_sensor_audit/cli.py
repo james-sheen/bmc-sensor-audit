@@ -35,6 +35,7 @@ from presence_audit.vocabulary import PluginError
 from .inventory.declaration_source import (DeclarationSourceError,
                                            candidate_from_walk,
                                            load_declaration_source, merge_sources)
+from presence_audit import exit_contract as _exit_contract
 from presence_audit.diff import compare
 from .inventory.entity_manager import load_declaration
 from .inventory.redfish import (CertificatePinError, RedfishClient, Walk,
@@ -45,7 +46,13 @@ from presence_audit.regression import compare_walks, parse_prefix_map
 from presence_audit.report import (as_json, as_text, regression_as_json, regression_as_text,
                      )
 
-EXIT_CLEAN, EXIT_REGRESSION, EXIT_INCOMPLETE = 0, 1, 2
+# DERIVED from the core's contract, not written out again here. The three
+# numbers had two homes -- this line and `presence_audit.exit_contract` -- and
+# two records of one fact drift. The NAMES stay this tool's own: `regression`
+# is what a `1` means here, and the core cannot know that.
+EXIT_CLEAN = _exit_contract.CLEAN
+EXIT_REGRESSION = _exit_contract.FINDINGS
+EXIT_INCOMPLETE = _exit_contract.INCOMPLETE
 
 
 def _load_recorded_walk(path: str) -> Walk:
@@ -518,7 +525,7 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
     # Composed the way `detect` composes its two stages: the worse wins, and 2 outranks
     # 1 because could-not-read is a different claim from something-got-worse.
     stage1 = EXIT_REGRESSION if report.regressions else EXIT_CLEAN
-    return max(stage1, unreadable_floor, strict_floor)
+    return _exit_contract.compose(stage1, unreadable_floor, strict_floor)
 
 
 def _cmd_detect(args: argparse.Namespace) -> int:
@@ -681,7 +688,8 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     # which returns 0 or 1 by contract -- `2` is the caller's to give.
     stage1 = EXIT_REGRESSION if current.regressions else EXIT_CLEAN
     schema_floor = EXIT_INCOMPLETE if outcome.schema_mismatch else EXIT_CLEAN
-    return max(stage1, outcome.exit_code, unreadable_floor, schema_floor)
+    return _exit_contract.compose(stage1, outcome.exit_code,
+                                  unreadable_floor, schema_floor)
 
 
 def _cmd_regression(args: argparse.Namespace) -> int:
@@ -734,7 +742,7 @@ def _cmd_regression(args: argparse.Namespace) -> int:
     if not report.complete:
         return EXIT_INCOMPLETE
     stage1 = EXIT_REGRESSION if report.regressions else EXIT_CLEAN
-    return max(stage1, strict_floor)
+    return _exit_contract.compose(stage1, strict_floor)
 
 
 def _cmd_validate_attestation(args: argparse.Namespace) -> int:

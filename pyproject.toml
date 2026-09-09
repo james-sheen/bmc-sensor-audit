@@ -45,7 +45,11 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # `>=0.1.0` floor would install a combination whose whole point does not work.
 # It was MEASURED, not chosen: CI on 0.1.1 fails importing `change_headlines`,
 # which does not exist there.
-dependencies = ["presence-audit>=0.1.2,<0.2"]
+# The floor is DERIVED, not chosen: `exit_contract` -- the shared compose rule
+# this tool's exit codes are built on -- is absent from 0.1.5 and 0.1.6 and
+# present in 0.1.7. Measured by installing each and importing it, not read off
+# a changelog. 0.1.2 was the floor before, for the report's noun handling.
+dependencies = ["presence-audit>=0.1.7,<0.2"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
