@@ -185,7 +185,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **773** collected with PyYAML installed, **747** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **779** collected with PyYAML installed, **753** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -643,7 +643,7 @@ which is how a repository ends up unable to release its own 1.0.
 
 | Tag | Versions | Installs |
 |---|---|---|
-| `v0.2.5` | the tool, on PyPI | — |
+| `vX.Y.Z` | the tool, on PyPI | — |
 | `action-v0` | this action, moving — tracks the latest `action-v0.x.y` | `bmc-sensor-audit>=0.3.0,<0.4`, with the `[detect]` extra when `mode: detect` |
 
 **`action-v0`, not `action-v1`, on purpose.** A `1.0.0` is a promise that the
@@ -774,9 +774,11 @@ declaration that every downstream generator trusts.
 
 Apache-2.0. See `LICENSE` and `NOTICE`.
 
-The same terms as `arbiter-engine`, which this depends on from Stage 2, and as
-OpenBMC's own `entity-manager`, which it reads. A consumer who already has both
-in their tree acquires no new licence obligation by adding this.
+The same terms as everything this depends on: `presence-audit`, which carries
+the declaration-against-capture core, and `arbiter-engine`, which Stage 2 asks
+for liveness. The same terms again as OpenBMC's own `entity-manager`, which this
+reads. A consumer who already has them in their tree acquires no new licence
+obligation by adding this.
 
 ## Hygiene
 
