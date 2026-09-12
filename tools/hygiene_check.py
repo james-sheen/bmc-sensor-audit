@@ -163,6 +163,43 @@ RULES = [
          "`example.com` one; anything else is a real inbox that a crawler will "
          "read and that no later commit can withdraw",
          re.IGNORECASE),
+
+    # BOTH OF THESE SHIPPED IN 0.1.0, and this sweep had no rule that could see
+    # either. They are here because an outside reader found them by reading package
+    # data, which is the surface a leak scanner is least likely to be pointed at.
+    #
+    # The absolute path was `engine_floors.json`'s `engine_file`: the full path of a
+    # scratch virtualenv on the machine that ran the probe, inside the published wheel.
+    # Nothing read the field, which is exactly why nothing caught it.
+    # Scoped to what `home_path` above does NOT reach. That rule covers /home, /Users
+    # and /root; the path that actually shipped was under /tmp, and a scratch
+    # virtualenv is where a probe writing package data naturally runs. Two rules rather
+    # than one widened rule, so each keeps a reason a reader can check.
+    Rule("scratch_path",
+         r"(?<![\w/])/(?:tmp|var/tmp|private/var/folders)/[\w.@+-]+/[\w./@+-]+",
+         "an absolute path under a temporary directory, which names the machine that "
+         "wrote this and one run on it. In package data it ships inside the wheel: "
+         "0.1.0 published the full path of a scratch virtualenv this way, in a field "
+         "nothing read. Record a module name, a relative path, or nothing",
+         0),
+
+    # The placeholder digest was `evidence/jira-capture.json`'s `export_sha256`:
+    # sixty-four `z` characters in a field named as a hash, in published evidence.
+    # A reader has no way to tell a filler value from a real one, so the field says
+    # *this was verified* while verifying nothing.
+    #
+    # Matched on the VALUE being a single repeated character or an obvious filler
+    # word, not on the field name -- a rule keyed on names would need every name
+    # anybody invents. Hex-looking real digests are not single-character runs, so
+    # this does not fire on them; the test beside it proves both directions.
+    Rule("placeholder_digest",
+         r"(?i)\"(?:[a-z_]*(?:sha256|sha1|md5|digest|checksum|hash)[a-z_]*)\"\s*:\s*"
+         r"\"(?:([0-9a-zA-Z])\1{15,}|x{8,}|TODO\b[^\"]*|FIXME\b[^\"]*|"
+         r"placeholder[^\"]*|changeme[^\"]*)\"",
+         "a field named as a digest holding a placeholder. Compute the real one, or "
+         "rename the field so it does not claim something was verified. Published "
+         "evidence carrying a filler hash is worse than evidence carrying none",
+         0),
 ]
 
 #: Addresses that are meant to be published, subtracted from `personal_email`.
