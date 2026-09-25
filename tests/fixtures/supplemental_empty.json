@@ -1,0 +1,4 @@
+{
+  "format": "presence-audit/supplemental/2",
+  "provenance": "SYNTHETIC. A fixture that declares nothing, written for this suite and describing no machine. It exists so a guard test can run `adopt` against any configuration at all: a supplemental naming a point the configuration does not declare is refused by the cross-check, so a file that names none is the only one every board satisfies."
+}

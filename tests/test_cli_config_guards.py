@@ -94,6 +94,14 @@ EXTRA_ARGS = {
     "declare": [],
     "coverage": ["--walk", str(WALK)],
     "detect": ["--walk", str(WALK)],
+    # `--list` rather than `--proposal`: the guards here are about what the
+    # command does with its CONFIG, and naming a proposal would make every row
+    # below depend on whether one was fitted. The supplemental declares nothing
+    # at all, because one naming a point the configuration does not carry is
+    # refused by the cross-check and no single fixture satisfies every board.
+    "adopt": ["--walk", str(WALK), "--supplemental",
+              str(ROOT / "tests" / "fixtures" / "supplemental_empty.json"),
+              "--list"],
 }
 
 

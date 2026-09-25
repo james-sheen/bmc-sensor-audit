@@ -20,6 +20,7 @@ That is the point.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import json
@@ -34,6 +35,39 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
+
+
+def _needs_the_engine(path: Path) -> bool:
+    """True when this module cannot be collected without `arbiter_engine`.
+
+    Asked of the PARSE TREE, not of the text. A module declares the dependency
+    by calling `importorskip` at module scope, and reading that as a string
+    would match the word wherever it appears -- in a docstring explaining the
+    rule, most likely in this very file's neighbours.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return False
+    for node in tree.body:
+        # MODULE SCOPE ONLY, and that is the whole predicate. `ast.walk` from a
+        # top-level `class` or `def` descends into its body, where an
+        # `importorskip` guards one test rather than the module -- counting
+        # those excluded 77 files that collect perfectly well.
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            name = getattr(call.func, "attr", None) or getattr(call.func, "id", None)
+            if name != "importorskip":
+                continue
+            for argument in call.args:
+                if (isinstance(argument, ast.Constant)
+                        and isinstance(argument.value, str)
+                        and argument.value.split(".")[0] == "arbiter_engine"):
+                    return True
+    return False
 
 
 def _env(**overrides) -> dict:
@@ -254,14 +288,21 @@ class TestTheReadmeTestCount:
         paths = [line for line in listed.stdout.split() if line]
         if listed.returncode != 0 or not paths:
             return [str(ROOT / "tests")]
-        # The engine-bridge exclusion is applied HERE and not left to `--ignore`.
+        # The engine-dependent exclusion is applied HERE and not left to `--ignore`.
         # `--ignore` filters directory collection; it does not suppress a file named
         # explicitly on the command line, so once this returns paths instead of a
         # directory the flag stops covering it. Measured: the count read 292 with the
         # engine installed and 272 without -- the exact installed-dependent population
         # this test exists to avoid, reintroduced by the mechanism meant to fix it.
+        #
+        # WHICH files those are is DERIVED, and it used to be the one filename
+        # somebody typed. A second engine-dependent module landed and the
+        # populations parted by 49 instead of 26, because the engine needs PyYAML
+        # and blocking PyYAML takes the engine with it -- so a module skipping on
+        # the engine skips on yaml too, one step removed, and became a difference
+        # the README does not name. A written list cannot see the next one.
         return [str(ROOT / path) for path in paths
-                if not path.endswith("test_engine_bridge.py")]
+                if not _needs_the_engine(ROOT / path)]
 
     #: A directory placed at the front of `PYTHONPATH` whose `sitecustomize`
     #: makes `import yaml` fail. `site` imports it at interpreter start, before
@@ -302,6 +343,36 @@ class TestTheReadmeTestCount:
             f"state the collected count with PyYAML and without it, because "
             f"they differ and a single number cannot be true of both")
         return numbers
+
+    def test_the_engine_dependent_predicate_finds_something(self):
+        """Non-vacuity. The exclusion is derived, and a derivation that matches
+        nothing puts an installed-dependent population back into both counts
+        while every assertion here stays green."""
+        named = sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
+                       if _needs_the_engine(p))
+        assert "test_engine_bridge.py" in named, named
+        assert len(named) >= 2, (
+            f"only {named} declares the engine at module scope; if the second "
+            f"one was deleted this is fine, but check before believing it")
+
+    def test_it_does_not_match_a_guard_inside_a_function(self, tmp_path):
+        """The over-match that cost 77 files. `ast.walk` from a top-level class
+        descends into it, so a per-test `importorskip` read as a module-level
+        one and excluded most of the suite -- counts that still agreed with
+        themselves and measured a different population."""
+        inner = tmp_path / "test_inner.py"
+        inner.write_text(
+            "import pytest\n\n\n"
+            "class TestSomething:\n"
+            "    def test_one(self):\n"
+            "        pytest.importorskip('arbiter_engine.api')\n")
+        assert not _needs_the_engine(inner)
+
+        outer = tmp_path / "test_outer.py"
+        outer.write_text(
+            "import pytest\n\n"
+            "pytest.importorskip('arbiter_engine.api')\n")
+        assert _needs_the_engine(outer)
 
     def test_the_readme_count_matches_what_pytest_collects(self, tmp_path):
         """The first number: PyYAML present, which is what CI runs.

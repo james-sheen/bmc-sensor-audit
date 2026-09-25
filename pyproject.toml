@@ -60,7 +60,24 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 #
 # Measured against `presence-audit==0.1.9` installed from the index: 812 passed,
 # 8 skipped, the same pair 0.1.8 reports.
-dependencies = ["presence-audit>=0.1.9,<0.2"]
+#
+# THE FLOOR MOVED TO 0.1.10 BECAUSE A DECLARED COUPLING DID NOT REACH THE ENGINE.
+# Two defects, both in the core and both invisible from either side of the seam:
+# nothing added the coupling's RELATIONSHIP, so a declared coupling produced
+# `couplings_seen: 0` and a run with one was byte-identical to a run without;
+# and the feeder stamped every observation sixty seconds apart whatever
+# `sampling_interval_s` said, so a delay validated against the collector's grid
+# was applied on a different one. Measured on a driven series generated from its
+# driver at exactly one interval with the file declaring 300 s: -0.0023 against a
+# truth of +0.0040, wrong sign, r_squared 0.33, interval excluding the truth.
+#
+# `adopt` writes a fitted gain into `--supplemental`, so that number is the one
+# it would have written, with a sentence beside it saying it was measured. This
+# is not a floor raised for a convenience: below it the command is wrong rather
+# than absent. MEASURED both ways -- `tests/test_adopt_writes_a_fitted_gain_down.py`
+# and `tests/test_burn_in_cadence.py` are 10 failed / 8 passed / 9 errors on
+# 0.1.9 and 27 passed on 0.1.10.
+dependencies = ["presence-audit>=0.1.10,<0.2"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
@@ -79,7 +96,14 @@ dependencies = ["presence-audit>=0.1.9,<0.2"]
 # every release inside it, and nothing between 0.1.8 and 0.2.4 was run
 # against this suite on the day the ceiling moved. The old floor's reason is
 # above and still holds; it is no longer the boundary this package sits on.
-detect = ["arbiter-engine>=0.2.4,<0.3"]
+#
+# 0.2.7 IS THE FLOOR BECAUSE `adopt` ASKS THE ENGINE A QUESTION 0.2.6 CANNOT
+# ANSWER. The replay -- what adopting a proposal would have caught, against a
+# corpus of what actually happened -- arrives through `model_describe(session,
+# surprises)`, and on 0.2.6 that function takes one argument. It is the gate
+# this command turns on, so below the floor `adopt` cannot refuse a number that
+# would have changed nothing, which is the discipline it exists to apply.
+detect = ["arbiter-engine>=0.2.7,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]

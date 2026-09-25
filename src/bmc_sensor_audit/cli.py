@@ -708,6 +708,181 @@ def _cmd_detect(args: argparse.Namespace) -> int:
                                   unreadable_floor, schema_floor)
 
 
+def _cmd_adopt(args: argparse.Namespace) -> int:
+    """Write one fitted gain into the supplemental file, or say why not.
+
+    Runs the same pipeline `detect` runs, from the same inputs, rather than
+    reading a number off an earlier report. Adopting is the one act here that
+    changes what a later audit asserts, and it should not be possible to do it
+    against a printout of a file that has since been edited. The cost is
+    passing the walks twice, which is what `detect` already asks for.
+    """
+    from . import adopt as _adopt
+
+    declaration = load_declaration(args.config)
+    declaration, refusal = _with_declaration_sources(declaration, args.declaration)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return EXIT_INCOMPLETE
+    if not declaration.sensors:
+        print("no sensors declared by any file under the given paths", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    # THE SAME FLOOR `coverage` AND `detect` APPLY, and it was missing from the
+    # first draft of this command -- caught by the derived guard table, which
+    # parametrises over every `--config` subcommand precisely so a new one
+    # cannot quietly skip it. A directory with one unparseable file returned 0
+    # here: an unreadable configuration is not a clean board, it is an unknown
+    # one, and adopting a number measured against part of a machine is worse
+    # than not adopting it.
+    unreadable_floor = _report_unreadable(declaration)
+
+    try:
+        import yaml
+        from arbiter_engine.api import EngineSession, model_describe
+    except ImportError as error:
+        print(f"adopt needs the optional extra, which is not installed: {error}\n"
+              "    pip install 'bmc-sensor-audit[detect]'", file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+
+    from presence_audit.feeder import feed
+    from presence_audit.generator import generate
+    from presence_audit.supplemental import (SupplementalError, load_supplemental,
+                                             unmatched_names)
+
+    try:
+        supplemental = load_supplemental(args.supplemental)
+    except SupplementalError as error:
+        print(str(error), file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+    if not supplemental.couplings:
+        print(f"{args.supplemental} declares no couplings, so there is nothing "
+              f"to fit.", file=sys.stderr)
+        # 2 only when a proposal was NAMED, because then the thing asked for
+        # cannot exist. Asking what was fitted and being told nothing is an
+        # answer, not a failure -- the same line this package already draws for
+        # liveness warming up.
+        return _exit_contract.compose(
+            EXIT_INCOMPLETE if args.proposal else EXIT_CLEAN,
+            unreadable_floor)
+    missing = unmatched_names(supplemental,
+                              {s.display_name for s in declaration.sensors})
+    if missing:
+        print(f"{args.supplemental} names {len(missing)} sensor(s) this "
+              f"configuration does not declare:", file=sys.stderr)
+        for name in missing:
+            print(f"    {name}", file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+
+    walks = [_load_recorded_walk(path) for path in args.walk]
+    walks, ordering = order_walks(walks)
+    if ordering:
+        print(f"{ordering}", file=sys.stderr)
+    reports = [compare(declaration, walk,
+                       include_disabled_in_config=args.include_disabled)
+               for walk in walks]
+    if not reports[-1].walk_complete:
+        # The same floor `detect` applies, and for a stronger reason here: an
+        # incomplete walk is a partial series, and a gain fitted on one is a
+        # number about a window that did not happen.
+        print("walk incomplete; nothing fitted", file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+
+    model, manifest = generate(declaration, domain_id="bmc-sensor-audit",
+                               expect_variation=not args.no_stuck_at,
+                               supplemental=supplemental)
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+        handle.write(yaml.safe_dump(model))
+        model_path = handle.name
+    session = EngineSession()
+    session.load_model(model_path)
+    feed_result = feed(session, manifest, reports)
+
+    corpus = None
+    if args.surprises:
+        from arbiter_engine.surprises import load_surprises
+
+        corpus, declines = load_surprises(args.surprises)
+        if declines:
+            # Refused, not warned. A corpus with unread keys scores a different
+            # set of entries from the one the operator wrote, and the replay
+            # gate below is the whole reason this command has a corpus at all.
+            print(f"{args.surprises} carries keys this engine does not read:",
+                  file=sys.stderr)
+            for decline in declines:
+                print(f"    {decline}", file=sys.stderr)
+            return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+
+    described = model_describe(session, corpus).to_dict()
+    candidates = _adopt.proposals(described, manifest,
+                                  grid_seconds=feed_result.interval_seconds)
+
+    if feed_result.couplings_not_fed:
+        print(f"{len(feed_result.couplings_not_fed)} declared coupling(s) did "
+              f"not reach the model this run:", file=sys.stderr)
+        for entry in feed_result.couplings_not_fed:
+            print(f"    {entry['from']} -> {entry['to']}: "
+                  f"{', '.join(entry['missing'])} not reading", file=sys.stderr)
+
+    if args.list or not args.proposal:
+        # An inspection, and it does not fail. A run that fitted nothing has not
+        # gone wrong: a gain needs both ends reading across enough paired
+        # changes, and not having them yet is the same fact as liveness warming
+        # up, which this package reports at 0 rather than at 2.
+        print(_render_proposals(candidates, feed_result))
+        return _exit_contract.compose(EXIT_CLEAN, unreadable_floor)
+
+    try:
+        proposal = _adopt.find(candidates, args.proposal)
+        stamp = _adopt.check(proposal, force=args.force)
+        basis = _adopt.basis_for(proposal, when=_adopt.now(), stamp=stamp)
+        if args.dry_run:
+            print(f"would set gain {proposal.gain:.6g} on {proposal.id}")
+            print(f"would set gain_basis:\n    {basis}")
+            print(f"\n{args.supplemental} is unchanged (--dry-run).")
+            return _exit_contract.compose(EXIT_CLEAN, unreadable_floor)
+        _adopt.write(args.supplemental, proposal, basis)
+    except _adopt.AdoptionRefused as error:
+        print(str(error), file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+
+    print(f"{args.supplemental}: {proposal.id} now declares gain "
+          f"{proposal.gain:.6g}")
+    print(f"  {basis}")
+    if stamp:
+        print(f"\nThis number is in your file WITHOUT evidence that adopting "
+              f"it catches more. The basis says so; nothing else will.",
+              file=sys.stderr)
+    return _exit_contract.compose(EXIT_CLEAN, unreadable_floor)
+
+
+def _render_proposals(candidates, feed_result) -> str:
+    """What was fitted, and what each one would be adopted on."""
+    if not candidates:
+        return ("Nothing fitted. A coupling is fitted only when both ends were "
+                "reading across enough paired changes; `detect` reports which.")
+    lines = [f"Fitted on a {feed_result.interval_seconds:g}s collection grid:", ""]
+    for candidate in candidates:
+        lines.append(f"  {candidate.id}")
+        low, high = candidate.interval
+        lines.append(f"      gain {candidate.gain:.6g}  n {candidate.n}  "
+                     f"r_squared {candidate.r_squared:.4g}  "
+                     f"interval [{low:.6g}, {high:.6g}]  "
+                     f"{candidate.response_model}")
+        if candidate.declared_gain is not None:
+            lines.append(f"      declared {candidate.declared_gain:g} already; "
+                         f"a fit that disagrees is a finding, not an edit")
+        elif candidate.replay_ran:
+            lines.append(f"      replay: detected "
+                         f"{candidate.replay.get('detected_before')} -> "
+                         f"{candidate.replay.get('detected_after')} of "
+                         f"{candidate.replay.get('confirmed')} confirmed "
+                         f"(delta {candidate.delta:+d})")
+        else:
+            lines.append("      replay: none -- "
+                         f"{candidate.replay.get('reason')}")
+    return "\n".join(lines)
+
+
 def _cmd_regression(args: argparse.Namespace) -> int:
     """Compare two captures of the same machine across a firmware change.
 
@@ -986,6 +1161,39 @@ def build_parser() -> argparse.ArgumentParser:
                              "the engine keeps them in memory and they are gone "
                              "when the process exits")
     detect.set_defaults(func=_cmd_detect)
+
+    adopt = subparsers.add_parser(
+        "adopt",
+        help="write a fitted coupling gain into the supplemental file")
+    adopt.add_argument("--config", required=True, action="append",
+                       help="entity-manager JSON file or directory (repeatable)")
+    adopt.add_argument("--declaration", action="append", metavar="PATH",
+                       help=_DECLARATION_HELP)
+    adopt.add_argument("--walk", required=True, action="append",
+                       help="a recorded walk; repeatable, OLDEST FIRST -- a gain "
+                            "is fitted from history and one walk is one sample")
+    adopt.add_argument("--supplemental", required=True,
+                       help="the declarations file to fit from and write into")
+    adopt.add_argument("--proposal", metavar="ID",
+                       help="which fitted gain to adopt, as `<driver> -> "
+                            "<driven>` in your own point names. Omit to list")
+    adopt.add_argument("--list", action="store_true",
+                       help="show what this run fitted and adopt nothing")
+    adopt.add_argument("--surprises", metavar="PATH",
+                       help="a surprise corpus for this domain. Without one "
+                            "nothing can say whether adopting a proposal would "
+                            "catch more, and adopt refuses rather than "
+                            "scoring it zero")
+    adopt.add_argument("--force", action="store_true",
+                       help="adopt even though the replay found no gain, or "
+                            "found no corpus. Stamps the basis with which of "
+                            "those it was")
+    adopt.add_argument("--dry-run", action="store_true",
+                       help="print what would be written and write nothing")
+    adopt.add_argument("--include-disabled", action="store_true")
+    adopt.add_argument("--no-stuck-at", action="store_true",
+                       help="do not expect readings to vary")
+    adopt.set_defaults(func=_cmd_adopt)
 
     validate = subparsers.add_parser(
         "validate-attestation",

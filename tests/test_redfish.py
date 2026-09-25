@@ -311,15 +311,31 @@ def test_every_vendored_walk_declares_its_provenance():
     they are rather than for the pattern, carried provenance, and were checked by
     nothing. Now every fixture in the directory answers, whatever it is called.
     """
-    walks = sorted(FIXTURES.glob("*.json"))
-    assert len(walks) >= 5, "the fixture set shrank"
+    fixtures = sorted(FIXTURES.glob("*.json"))
+    assert len(fixtures) >= 5, "the fixture set shrank"
     kinds = {}
-    for path in walks:
+    for path in fixtures:
         payload = json.loads(path.read_text())
-        assert "_provenance" in payload, f"{path.name} carries no provenance"
-        kinds[path.name] = ("CAPTURED" if "CAPTURED" in payload["_provenance"]
-                            else "SYNTHETIC" if "SYNTHETIC" in payload["_provenance"]
+        # A SECOND FORMAT NOW LIVES HERE and declares provenance under its own
+        # key: a supplemental file spells it `provenance`. Both are read, because
+        # the claim this makes is *every fixture says where it came from* and
+        # that claim does not belong to one format's spelling.
+        provenance = payload.get("_provenance") or payload.get("provenance")
+        assert provenance, f"{path.name} carries no provenance"
+        if not str(payload.get("format", "")).startswith("bmc-sensor-audit/"):
+            # Its provenance is asserted above; the CAPTURED / SYNTHETIC
+            # vocabulary below is about where READINGS came from, and a file in
+            # another project's format is not readings. Keyed on the format the
+            # file DECLARES, not on what it is called -- a naming convention
+            # standing in for a list is the defect this test was widened to fix,
+            # and it is also why the prefix is the distribution rather than
+            # `/walk/`: the directory holds a walk, a walk series and a set of
+            # recorded documents, and all three are evidence about a machine.
+            continue
+        kinds[path.name] = ("CAPTURED" if "CAPTURED" in provenance
+                            else "SYNTHETIC" if "SYNTHETIC" in provenance
                             else "UNDECLARED")
+    assert len(kinds) >= 5, f"the evidence fixture set shrank: {sorted(kinds)}"
     assert "UNDECLARED" not in kinds.values(), kinds
     assert "CAPTURED" in kinds.values(), \
         "no captured walk remains; criterion 2 is back to fixtures this project wrote"

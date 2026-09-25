@@ -21,7 +21,7 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.2**, tagged `v0.3.2`, Apache-2.0, on PyPI as
+**Released — 0.3.3**, tagged `v0.3.3`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
@@ -185,7 +185,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **824** collected with PyYAML installed, **798** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **831** collected with PyYAML installed, **805** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -721,9 +721,49 @@ operator picked. `detect` now names them. That is the same argument the required
 `basis` makes, one level down: a check running against an unspecified threshold is
 a working check, not a specified one.
 
-**Burn-in.** How many walks a liveness run needs, why the station's interval is
-not in that arithmetic, and the window that silently caps it:
+**Burn-in.** How many walks a liveness run needs, how the station's interval
+enters that arithmetic, and the window that silently caps it:
 [`docs/burn-in.md`](docs/burn-in.md).
+
+### A coupling, and writing its gain down
+
+A supplemental file can declare that one reading **drives** another — a fan
+tachometer and the thermistor downstream of the air it moves. That is a
+structural claim somebody who knows the installation can make. *By how much* is
+a coefficient, and almost nobody has one, so `gain: estimate` withholds it: the
+engine fits the number from history, reports it with its sample count, its
+r-squared and an interval, and **projects nothing until a person writes a number
+down**.
+
+`adopt` is how the number gets written down.
+
+```
+bmc-sensor-audit adopt --config <entity-manager-configs> \
+                 --walk walk0.json --walk walk1.json ... \
+                 --supplemental supplemental.json --list
+bmc-sensor-audit adopt ... --proposal 'FAN_A_TACH -> OUTLET_TEMP' \
+                 --surprises surprises.yaml
+```
+
+It re-runs the same fit from the same inputs — adopting is the one act here that
+changes what a later audit asserts, and it should not be possible against a
+printout of a file that has since been edited — then writes `gain` and a
+`gain_basis` sentence carrying the support the decision rested on.
+
+**It refuses more often than it writes**, and each refusal is a different fact:
+
+| Refusal | Why | Override |
+|---|---|---|
+| the coupling already declares a number | that is your claim about the machine; a fit that disagrees is a **finding**, which `detect` reports | none — this one does not move |
+| the replay found the proposal caught no more | `r_squared` says how well it fits the window it was fitted on, which is a different question | `--force`, stamping `adopted_without_replay_gain` |
+| there is no corpus to replay against | a proposal nobody could test is not a proposal that failed | `--force`, stamping `adopted_untested` |
+
+**The engine will not do this and that has not changed.** It proposes and never
+promotes, on the grounds that a tool which replaces a declaration with its own
+measurement leaves nobody able to say what the model asserts. What makes this
+different is the distance: a separate distribution, a separate command, a
+proposal named by a person, and a basis in the file. Take any one of those away
+and it is the thing the engine refuses.
 
 **A per-run record.** `--attest-out` writes what was checked, what was **declined**,
 and the measurement behind every finding — the reading, the threshold it crossed and
