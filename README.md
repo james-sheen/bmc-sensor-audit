@@ -765,6 +765,15 @@ changes what a later audit asserts, and it should not be possible against a
 printout of a file that has since been edited — then writes `gain` and a
 `gain_basis` sentence carrying the support the decision rested on.
 
+**It writes the spread beside it.** The engine proposes a `gain_sigma` with every
+fitted gain, the standard error of the fit, and `adopt` writes it with a
+`gain_sigma_basis` of its own saying what that number assumes and whether the
+engine found the assumption held. Without it the band a coupling's projection is
+graded against treats the gain as exact. The spread needs supplemental format 3,
+so `adopt` raises a file declaring format 2 and says it did: an older build then
+refuses the file by name instead of dropping the spread. A proposal with no
+usable standard error writes the gain alone, and says so.
+
 **It refuses more often than it writes**, and each refusal is a different fact:
 
 | Refusal | Why | Override |

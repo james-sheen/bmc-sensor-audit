@@ -1119,25 +1119,60 @@ def _cmd_adopt(args: argparse.Namespace) -> int:
     try:
         proposal = _adopt.find(candidates, args.proposal)
         stamp = _adopt.check(proposal, force=args.force)
-        basis = _adopt.basis_for(proposal, when=_adopt.now(), stamp=stamp)
+        when = _adopt.now()
+        basis = _adopt.basis_for(proposal, when=when, stamp=stamp)
+        spread_basis = (_adopt.spread_basis_for(proposal, when=when)
+                        if proposal.spread is not None else None)
         if args.dry_run:
             print(f"would set gain {proposal.gain:.6g} on {proposal.id}")
             print(f"would set gain_basis:\n    {basis}")
+            if spread_basis is not None:
+                print(f"would set gain_sigma {proposal.spread:.6g}")
+                print(f"would set gain_sigma_basis:\n    {spread_basis}")
+                raise_to = _adopt.format_for_spread(
+                    _adopt.declared_format(args.supplemental))
+                if raise_to is not None:
+                    print(f"would raise the format to {raise_to!r}, the "
+                          f"oldest that carries a spread")
+            else:
+                print(_no_spread(proposal), file=sys.stderr)
             print(f"\n{args.supplemental} is unchanged (--dry-run).")
             return _exit_contract.compose(EXIT_CLEAN, unreadable_floor)
-        _adopt.write(args.supplemental, proposal, basis)
+        written = _adopt.write(args.supplemental, proposal, basis, spread_basis)
     except _adopt.AdoptionRefused as error:
         print(str(error), file=sys.stderr)
         return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
 
     print(f"{args.supplemental}: {proposal.id} now declares gain "
-          f"{proposal.gain:.6g}")
+          f"{proposal.gain:.6g}"
+          + (f" with gain_sigma {written.spread:.6g}"
+             if written.spread is not None else ""))
     print(f"  {basis}")
+    if written.spread is not None:
+        print(f"  {spread_basis}")
+    if written.format_raised_to is not None:
+        print(f"\nThe format was raised from {written.format_raised_from!r} to "
+              f"{written.format_raised_to!r}, the oldest that carries a "
+              f"spread: a build reading only the older one refuses this file "
+              f"by name rather than dropping the spread.")
+    if written.spread is None:
+        print(_no_spread(proposal), file=sys.stderr)
     if stamp:
         print(f"\nThis number is in your file WITHOUT evidence that adopting "
               f"it catches more. The basis says so; nothing else will.",
               file=sys.stderr)
     return _exit_contract.compose(EXIT_CLEAN, unreadable_floor)
+
+
+def _no_spread(proposal) -> str:
+    """Why an adopted gain went in without a spread, and what that costs."""
+    why = ("the engine proposed none with this fit"
+           if proposal.gain_sigma is None else
+           f"the fit's standard error is {proposal.gain_sigma:.3g}, and a "
+           f"spread is a positive number")
+    return (f"\nNo gain_sigma was written: {why}. This coupling's projections "
+            f"are still graded, against a band that treats the gain as exact "
+            f"until a spread is stated with its basis.")
 
 
 def _render_proposals(candidates, feed_result) -> str:
@@ -1153,6 +1188,11 @@ def _render_proposals(candidates, feed_result) -> str:
                      f"r_squared {candidate.r_squared:.4g}  "
                      f"interval [{low:.6g}, {high:.6g}]  "
                      f"{candidate.response_model}")
+        lines.append(f"      gain_sigma {candidate.spread:.6g}, written beside "
+                     f"the gain as its spread"
+                     if candidate.spread is not None else
+                     "      gain_sigma none -- its projections would be graded "
+                     "as though the gain were exact")
         if candidate.declared_gain is not None:
             lines.append(f"      declared {candidate.declared_gain:g} already; "
                          f"a fit that disagrees is a finding, not an edit")

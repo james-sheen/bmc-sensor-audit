@@ -41,11 +41,21 @@ its subject.
 keys go; `presence-audit` owns what they mean. So the file is written, loaded
 back through `load_supplemental`, and restored if it does not parse. A writer
 holding its own second opinion about a format is how the two drift.
+
+**THE SPREAD IS WRITTEN BESIDE THE GAIN.** The engine proposes one with every
+fitted gain: the standard error of the fit, which is how well the readings pin
+the gain down. Without it, the band around what the coupling projects carries
+only the driver's forecast doubt, as though the gain were exact -- and until
+supplemental format 3 there was nowhere to write one. It is written with a
+basis of its own saying what it assumes, and the file is raised to the oldest
+format that carries it: a document under an earlier id is still that document,
+and the raise is the notice an older build needs to refuse it by name.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,6 +102,13 @@ class Proposal:
     grid_seconds: float
     declared_gain: float | None
     replay: dict
+    #: The engine's proposed `gain_sigma`: the standard error of the fitted
+    #: gain. `None` where the payload carried none.
+    gain_sigma: float | None = None
+    #: Whether the engine reports that standard error readable as stated on
+    #: this fit. `None` where it did not say.
+    sigma_assumes_independence: bool | None = None
+    residual_autocorrelation: float | None = None
 
     @property
     def replay_ran(self) -> bool:
@@ -100,6 +117,21 @@ class Proposal:
     @property
     def delta(self) -> int | None:
         return self.replay.get("delta") if self.replay_ran else None
+
+    @property
+    def spread(self) -> float | None:
+        """The standard error, where it can be written down as a spread.
+
+        A zero is not one: the format refuses it because the engine reads zero
+        as no spread at all. A merely tiny one -- a noise-free fit proposes
+        about 3e-18 -- is that fit's standard error, and is written as it is:
+        choosing a floor below which a real number counts as none would be
+        this module picking a threshold nobody declared.
+        """
+        sigma = self.gain_sigma
+        if sigma is None or not math.isfinite(sigma) or sigma <= 0:
+            return None
+        return sigma
 
 
 def proposals(described: dict, manifest: Any, *,
@@ -130,6 +162,8 @@ def proposals(described: dict, manifest: Any, *,
             # list, because they will go looking for the wrong thing.
             continue
         low, high = (row.get("interval") or [float("nan"), float("nan")])[:2]
+        independent = row.get("gain_sigma_assumes_independent_residuals")
+        autocorrelation = row.get("residual_autocorrelation")
         out.append(Proposal(
             id=f"{driver} -> {driven}",
             driver=driver, driven=driven,
@@ -140,7 +174,13 @@ def proposals(described: dict, manifest: Any, *,
             grid_seconds=float(grid_seconds),
             declared_gain=(None if row.get("declared_gain") is None
                            else float(row["declared_gain"])),
-            replay=dict(row.get("replay") or {})))
+            replay=dict(row.get("replay") or {}),
+            gain_sigma=(None if row.get("gain_sigma") is None
+                        else float(row["gain_sigma"])),
+            sigma_assumes_independence=(None if independent is None
+                                        else bool(independent)),
+            residual_autocorrelation=(None if autocorrelation is None
+                                      else float(autocorrelation))))
     return out
 
 
@@ -206,6 +246,88 @@ def basis_for(proposal: Proposal, *, when: datetime,
     return ". ".join(parts) + "."
 
 
+def spread_basis_for(proposal: Proposal, *, when: datetime) -> str:
+    """The sentence written into `gain_sigma_basis`.
+
+    Its own sentence, because the spread is its own claim. The gain's basis
+    says where the number came from; this says how sure that number is and
+    what the sureness ASSUMES -- a standard error is exact only where the
+    fit's residuals are independent, the engine reports whether that held on
+    this fit, and nothing in the file can recover that verdict afterwards.
+    """
+    spread = proposal.spread
+    parts = [
+        f"adopted_from_proposal {proposal.id} at {when.isoformat()} "
+        f"by bmc-sensor-audit {__version__}",
+        f"the standard error of the fitted gain, {spread:.6g}, over "
+        f"{proposal.n} paired changes through a {proposal.response_model} "
+        f"response on a {proposal.grid_seconds:g}s collection grid: how well "
+        f"the readings pin the gain down, not how much they scatter",
+    ]
+    autocorrelation = ("" if proposal.residual_autocorrelation is None else
+                       f" (lag-1 residual autocorrelation "
+                       f"{proposal.residual_autocorrelation:.3g})")
+    if proposal.sigma_assumes_independence is False:
+        parts.append(
+            f"the engine reports it NOT readable as stated on a "
+            f"{proposal.response_model} fit{autocorrelation}: it comes out "
+            f"wider than the gain's true scatter, so the band it draws errs "
+            f"wide")
+    elif proposal.sigma_assumes_independence is True:
+        parts.append(
+            f"the engine reports it readable as stated on a "
+            f"{proposal.response_model} fit{autocorrelation}")
+    else:
+        parts.append("the engine did not say whether it is readable as stated "
+                     "on this fit")
+    return ". ".join(parts) + "."
+
+
+#: The coupling key a spread is written under, which is also the engine's.
+SPREAD_KEY = "gain_sigma"
+
+
+def declared_format(path: str | Path) -> str | None:
+    """The format id a supplemental file declares, read as written."""
+    return json.loads(Path(path).read_text(encoding="utf-8")).get("format")
+
+
+def format_for_spread(declared: str | None) -> str | None:
+    """The id a file must declare to carry a spread; `None` if it already can.
+
+    The OLDEST such id, not the newest: raising a header is a change to the
+    author's file, and the smallest change that carries the key is the one an
+    older build is likeliest to read.
+    """
+    from presence_audit import supplemental as _format
+
+    by_format = getattr(_format, "COUPLING_KEYS_BY_FORMAT", None)
+    if by_format is None:
+        raise AdoptionRefused(
+            "the installed presence-audit reads no supplemental format that "
+            "can carry a coupling's spread, so the fitted gain would be "
+            "written and never graded. It needs presence-audit 0.1.11 or "
+            "later: pip install --upgrade presence-audit")
+    if SPREAD_KEY in by_format.get(declared, ()):
+        return None
+    for name in reversed(_format.ACCEPTED_FORMATS):
+        if SPREAD_KEY in by_format.get(name, ()):
+            return name
+    raise AdoptionRefused(
+        "the installed presence-audit declares no format carrying a "
+        "coupling's spread")
+
+
+@dataclass(frozen=True)
+class Written:
+    """What `write` put into the file, for the command to say."""
+
+    text: str
+    spread: float | None
+    format_raised_from: str | None = None
+    format_raised_to: str | None = None
+
+
 def check(proposal: Proposal, *, force: bool) -> str | None:
     """The gate. Returns the stamp to record, or raises the refusal.
 
@@ -244,19 +366,36 @@ def check(proposal: Proposal, *, force: bool) -> str | None:
     return None
 
 
-def write(path: str | Path, proposal: Proposal, basis: str) -> str:
-    """Set `gain` and `gain_basis` on the matching coupling, and prove it parses.
+def write(path: str | Path, proposal: Proposal, basis: str,
+          spread_basis: str | None = None) -> Written:
+    """Set `gain` and `gain_basis` on the matching coupling -- and the spread,
+    when `spread_basis` is given and the fit has one -- and prove it parses.
 
-    Returns the new text. The file is written, re-read through the format's own
-    loader, and RESTORED if that refuses -- this module knows where the keys go
-    and `presence-audit` owns what they mean, and a writer carrying its own
-    second opinion about a format is how the two come apart.
+    The file is written, re-read through the format's own loader, and RESTORED
+    if that refuses -- this module knows where the keys go and
+    `presence-audit` owns what they mean, and a writer carrying its own second
+    opinion about a format is how the two come apart.
     """
     from presence_audit.supplemental import SupplementalError, load_supplemental
 
     path = Path(path)
     original = path.read_text(encoding="utf-8")
     document = json.loads(original)
+    spread = proposal.spread if spread_basis else None
+    raised_from = raised_to = None
+    if spread is not None:
+        raised_to = format_for_spread(document.get("format"))
+        if raised_to is not None:
+            raised_from = document.get("format")
+
+    def _number(into: dict) -> None:
+        into["gain"] = proposal.gain
+        into["gain_basis"] = basis
+        if spread is not None:
+            into[SPREAD_KEY] = spread
+            into["gain_sigma_basis"] = spread_basis
+
+    written_here = ("gain_basis", SPREAD_KEY, "gain_sigma_basis")
     couplings = document.get("couplings") or []
     for index, block in enumerate(couplings):
         if (str(block.get("from")) == proposal.driver
@@ -265,12 +404,12 @@ def write(path: str | Path, proposal: Proposal, basis: str) -> str:
             # instead of at the end of the block. A provenance sentence three
             # keys away from the number it is about is one a reviewer reads
             # separately, and the whole reason it is there is to be read with it.
+            # The spread follows for the same reason: it is about that number.
             rebuilt: dict = {}
             for key, value in block.items():
                 if key == "gain":
-                    rebuilt["gain"] = proposal.gain
-                    rebuilt["gain_basis"] = basis
-                elif key != "gain_basis":
+                    _number(rebuilt)
+                elif key not in written_here:
                     rebuilt[key] = value
             if "gain" not in rebuilt:
                 # `gain:` IS OPTIONAL IN THIS FORMAT -- absent means withheld,
@@ -278,8 +417,7 @@ def write(path: str | Path, proposal: Proposal, basis: str) -> str:
                 # keys would then have written nothing at all and reported
                 # success, which is the failure this whole command exists to
                 # avoid one level up: a file that reads as adopted and is not.
-                rebuilt["gain"] = proposal.gain
-                rebuilt["gain_basis"] = basis
+                _number(rebuilt)
             couplings[index] = rebuilt
             break
     else:
@@ -287,6 +425,8 @@ def write(path: str | Path, proposal: Proposal, basis: str) -> str:
             f"{path} declares no coupling from {proposal.driver!r} to "
             f"{proposal.driven!r}; it may have been edited since this run "
             f"read it")
+    if raised_to is not None:
+        document["format"] = raised_to
 
     updated = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
     path.write_text(updated, encoding="utf-8")
@@ -309,7 +449,17 @@ def write(path: str | Path, proposal: Proposal, basis: str) -> str:
         raise AdoptionRefused(
             f"the file loaded back without the adopted gain on "
             f"{proposal.id}. {path} is unchanged.")
-    return updated
+    if spread is not None and getattr(landed, SPREAD_KEY, None) != spread:
+        # The same post-condition, for the half that makes the gain gradeable:
+        # a spread that did not land leaves a projection that files nothing,
+        # from a file that reads as though it would.
+        path.write_text(original, encoding="utf-8")
+        raise AdoptionRefused(
+            f"the file loaded back without the adopted spread on "
+            f"{proposal.id}. {path} is unchanged.")
+    return Written(text=updated, spread=spread,
+                   format_raised_from=raised_from,
+                   format_raised_to=raised_to)
 
 
 def now() -> datetime:

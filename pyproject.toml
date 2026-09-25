@@ -77,7 +77,15 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # than absent. MEASURED both ways -- `tests/test_adopt_writes_a_fitted_gain_down.py`
 # and `tests/test_burn_in_cadence.py` are 10 failed / 8 passed / 9 errors on
 # 0.1.9 and 27 passed on 0.1.10.
-dependencies = ["presence-audit>=0.1.10,<0.2"]
+#
+# THE FLOOR MOVED TO 0.1.11 BECAUSE `adopt` WRITES A SPREAD. The engine proposes
+# a `gain_sigma` with every fitted gain and `adopt` writes it beside the gain,
+# which needs supplemental format 3 -- the first that carries a spread, cut in
+# presence-audit 0.1.11. Below it `adopt` refuses by name rather than writing a
+# gain whose spread no reader can load. MEASURED both ways:
+# `tests/test_adopt_writes_the_spread_beside_the_gain.py` is 5 failed / 6 passed
+# / 11 errors on 0.1.10 and 22 passed on the tree that becomes 0.1.11.
+dependencies = ["presence-audit>=0.1.11,<0.2"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
