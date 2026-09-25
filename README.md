@@ -21,10 +21,18 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.3**, tagged `v0.3.3`, Apache-2.0, on PyPI as
+**Released — 0.3.4**, tagged `v0.3.4`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.4 files what it forecasts, and can keep running.** `detect --ledger`
+handed the engine a ledger and filed nothing into it; it now files the forecasts
+the model declares, `--history` keeps the readings a later run grades them
+against, and `--resident` grades each cycle's matured forecasts in one process.
+It needs `arbiter-engine` 0.2.9, the first that grades through a durable store.
+The Mt. Jade example gains a coupling whose basis is the platform's own
+fan-control configuration.
 
 **0.3.1 tells the core what a sensor is called.** `presence-audit` 0.1.2 stopped
 spelling one domain's nouns into its shared report and started asking the
