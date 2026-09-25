@@ -21,10 +21,19 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.4**, tagged `v0.3.4`, Apache-2.0, on PyPI as
+**Released — 0.3.5**, tagged `v0.3.5`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.5 grades a coupling, and writes a fitted gain's spread beside it.** Each
+`detect` cycle now rolls the model forward from the driver's own forecast, so a
+coupling whose gain is written down files what it predicts for the reading it
+drives, and a later cycle grades it. Until now the roll-forward started from the
+current readings, which moves nothing when no action is scheduled, so no coupling
+was ever graded. `adopt` also writes the engine's proposed `gain_sigma` with a
+basis of its own, raising the file to supplemental format 3; that needs
+`presence-audit` 0.1.11.
 
 **0.3.4 files what it forecasts, and can keep running.** `detect --ledger`
 handed the engine a ledger and filed nothing into it; it now files the forecasts
