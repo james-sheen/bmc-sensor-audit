@@ -106,6 +106,26 @@ def _require_the_pinned_engine() -> None:
             f"BSA_VERIFY_ENGINE_PRERELEASE, and its release part {comparable} is "
             f"still outside >={floor},<{ceiling}. Naming a pre-release opts into "
             f"verifying it, not into ignoring the pin", pytrace=False)
+    if outside and named and named != installed:
+        pytest.fail(
+            f"BSA_VERIFY_ENGINE_PRERELEASE names {named}, and arbiter-engine "
+            f"{installed} is installed. It admits the one version it names, so "
+            f"it shuts again by itself when the engine moves; set it to "
+            f"{installed} to verify this one", pytrace=False)
+    if outside and not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", installed):
+        # THE DOOR, NAMED WHERE IT IS NEEDED. The opt-in above existed for three
+        # weeks before anything said where it was, so a developer running this
+        # against engine master met 54 setup errors and a remedy that could only
+        # downgrade them away from the version they meant to test. One session
+        # faked a final version string instead. A pre-release is the one case
+        # the door exists for, so the refusal says which variable opens it and
+        # with what value -- and still does not open it by itself.
+        pytest.fail(
+            f"arbiter-engine {installed} is a pre-release, and this project pins "
+            f">={floor},<{ceiling} in plain X.Y.Z. To verify THIS engine against "
+            f"this suite, name it: BSA_VERIFY_ENGINE_PRERELEASE={installed}. "
+            f"Otherwise it is an environment error, not a code failure: "
+            f"pip install --upgrade 'bmc-sensor-audit[detect]'", pytrace=False)
     if outside:
         pytest.fail(
             f"arbiter-engine {installed} is installed but this project pins "
@@ -1252,3 +1272,46 @@ class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
             f"{len(declaration.sensors)} declared, {len(manifest.sensors)} modelled, "
             f"{excluded} excluded -- these do not add up, so something was dropped "
             f"without a reason being recorded")
+
+
+class TestThePreReleaseDoorIsNamedWhereItIsNeeded:
+    """The guard's refusals, each asked of the guard itself with the installed
+    version substituted. The door existed for three weeks before any message or
+    document said where it was, and 54 setup errors pointed only at a downgrade.
+    """
+
+    @staticmethod
+    def _refusal(monkeypatch, installed, named=None):
+        monkeypatch.setattr(importlib.metadata, "version", lambda _name: installed)
+        if named is None:
+            monkeypatch.delenv("BSA_VERIFY_ENGINE_PRERELEASE", raising=False)
+        else:
+            monkeypatch.setenv("BSA_VERIFY_ENGINE_PRERELEASE", named)
+        try:
+            _require_the_pinned_engine()
+        except pytest.fail.Exception as refusal:
+            return str(refusal)
+        return None
+
+    def test_a_pre_release_is_told_the_variable_and_the_value(self, monkeypatch):
+        message = self._refusal(monkeypatch, "0.2.9.dev0")
+        assert message is not None, "a pre-release was admitted without being named"
+        assert "BSA_VERIFY_ENGINE_PRERELEASE=0.2.9.dev0" in message, message
+
+    def test_naming_it_opens_the_door(self, monkeypatch):
+        assert self._refusal(monkeypatch, "0.2.9.dev0", named="0.2.9.dev0") is None
+
+    def test_a_stale_name_says_it_is_stale(self, monkeypatch):
+        """The opt-in expires by itself; the refusal says that is what happened
+        rather than reading as an ordinary out-of-range install."""
+        message = self._refusal(monkeypatch, "0.2.9.dev0", named="0.2.8.dev0")
+        assert message is not None
+        assert "names 0.2.8.dev0" in message and "0.2.9.dev0 is installed" in message
+
+    def test_a_final_version_outside_the_pin_is_not_offered_the_door(self, monkeypatch):
+        """The door is for a pre-release. Offering it to a plain release below
+        the floor would teach the variable as a way round the pin."""
+        message = self._refusal(monkeypatch, "0.1.0")
+        assert message is not None
+        assert "BSA_VERIFY_ENGINE_PRERELEASE" not in message
+        assert "pip install --upgrade" in message

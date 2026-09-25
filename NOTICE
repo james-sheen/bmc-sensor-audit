@@ -41,6 +41,24 @@ files had been renamed upstream and every corpus count had moved. An unpinned
 snapshot of third-party content does not stay a snapshot; it becomes a claim
 about a revision nobody can identify.
 
+`tests/fixtures/fan-control/ampere-mtjade/` contains three fan-control
+configuration files copied verbatim from the OpenBMC project's Ampere layer,
+`meta-ampere/meta-jade/recipes-phosphor/fans/phosphor-fan/`:
+
+    https://github.com/openbmc/openbmc
+
+The layer states its own licensing: its metadata is MIT unless otherwise
+stated, and other files default to Apache-2.0. That statement is reproduced
+unmodified beside the files as `LICENSE`, with the two texts it names
+(`COPYING.apache-2.0`, `COPYING.MIT`). The three files are unmodified and
+byte-identical to their sources, and `examples/supplemental/ampere-mtjade.json`
+cites them as the basis of the coupling it declares. The directory's
+`README.md` records what they establish and what they do not.
+
+Pinned to upstream commit:
+
+    9a2f15583ae35eeb06852b4f825b440653323338
+
 At Stage 2 this project depends on `arbiter-engine`, which is separately
 licensed under the same terms. It is a consumer of that package and not a part
 of it.

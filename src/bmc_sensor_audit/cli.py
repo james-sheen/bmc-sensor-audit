@@ -22,7 +22,8 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,19 @@ from presence_audit.report import (as_json, as_text, regression_as_json, regress
 EXIT_CLEAN = _exit_contract.CLEAN
 EXIT_REGRESSION = _exit_contract.FINDINGS
 EXIT_INCOMPLETE = _exit_contract.INCOMPLETE
+
+
+def _now() -> datetime:
+    """The instant a resident cycle starts, and the one it stamps and files at.
+
+    A module attribute rather than a bare call, together with `_sleep`, so a
+    bench can drive a resident run through an hour of simulated collection in
+    a second -- the only way a test can watch a forecast mature.
+    """
+    return datetime.now(timezone.utc)
+
+
+_sleep = time.sleep
 
 
 def _load_recorded_walk(path: str) -> Walk:
@@ -536,6 +550,10 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     complete is not a board with missing sensors, and neither is an engine that is not
     installed.
     """
+    stores_refusal = _stores_refusal(args)
+    if stores_refusal:
+        print(stores_refusal, file=sys.stderr)
+        return EXIT_INCOMPLETE
     declaration = load_declaration(args.config)
     declaration, refusal = _with_declaration_sources(declaration, args.declaration)
     if refusal:
@@ -548,7 +566,11 @@ def _cmd_detect(args: argparse.Namespace) -> int:
 
     # `--walk` is repeatable and CHRONOLOGICAL, oldest first: stuck-at needs history,
     # and one walk is one sample. A live target gives exactly one.
-    if args.walk:
+    if args.resident:
+        # The resident loop walks for itself, every cycle; a first walk here
+        # would be one sample no cycle ever fed.
+        walks, target = [], args.target
+    elif args.walk:
         walks = [_load_recorded_walk(path) for path in args.walk]
         # The last walk supplies every current reading, so the order is not a
         # presentation detail. A shell glob hands over lexical order, in which
@@ -571,14 +593,15 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     reports = [compare(declaration, walk,
                        include_disabled_in_config=args.include_disabled)
                for walk in walks]
-    current = reports[-1]
-    print(as_text(current, target=target))
+    current = reports[-1] if reports else None
+    if current is not None:
+        print(as_text(current, target=target))
 
-    if not current.walk_complete:
-        # An incomplete walk is not an empty machine, and it is not a model worth
-        # feeding either. Stop before the engine sees a partial picture.
-        print("\nwalk incomplete; liveness not evaluated", file=sys.stderr)
-        return EXIT_INCOMPLETE
+        if not current.walk_complete:
+            # An incomplete walk is not an empty machine, and it is not a model
+            # worth feeding either. Stop before the engine sees a partial picture.
+            print("\nwalk incomplete; liveness not evaluated", file=sys.stderr)
+            return EXIT_INCOMPLETE
 
     try:
         import yaml
@@ -590,7 +613,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         return EXIT_INCOMPLETE
 
     from presence_audit.feeder import evaluate, feed
-    from presence_audit.generator import generate
+    from presence_audit.generator import DEFAULT_SAMPLE_INTERVAL_S, generate
     from presence_audit.supplemental import (SupplementalError, load_supplemental,
                                       unmatched_names)
     from presence_audit.report import detect_as_text, supplemental_as_text
@@ -634,23 +657,37 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
         handle.write(yaml.safe_dump(model))
         model_path = handle.name
-    # A RESIDENT session when the operator asks for one. The engine has kept a
+    # DURABLE STORES when the operator asks for them. The engine has kept a
     # durable prediction ledger since 0.2.3 and `SqlitePredictionLedger` became
-    # a supported top-level name in 0.2.6; until now nothing here constructed
-    # one, so every prediction this bridge filed died with the process and
-    # `calibration()` had no earlier horizon to grade against.
+    # a supported top-level name in 0.2.6. Handing the session one was half of
+    # it: nothing here FILED a prediction, so the file stayed empty however many
+    # horizons passed. `_file_forecasts` below is the other half, and
+    # `--history` is the third, because grading needs the readings too.
     #
     # NO EXTRA IS DECLARED FOR THIS, and that is measured rather than assumed:
-    # the ledger imports nothing outside the standard library, and the engine
+    # both stores import nothing outside the standard library, and the engine
     # itself publishes no `resident` extra. An extra that installs nothing is
     # ceremony, and a caller who pip-installed it would be told they had gained
     # a capability they already had.
-    ledger = None
-    if getattr(args, "ledger", None):
-        from arbiter_engine import SqlitePredictionLedger
-
-        ledger = SqlitePredictionLedger(args.ledger)
-    session = EngineSession(ledger=ledger) if ledger else EngineSession()
+    try:
+        ledger, history = _open_stores(args)
+    except _StoresUnavailable as error:
+        print(f"\n{error}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    # The collector's cadence is the file's to declare; `--every` is how often a
+    # resident run actually walks, and they are allowed to differ only openly.
+    declared = float(manifest.sampling_interval_s or DEFAULT_SAMPLE_INTERVAL_S)
+    cadence = float(args.every) if args.every is not None else declared
+    if cadence != declared:
+        print(f"\n--every {cadence:g}s differs from the declared cadence of "
+              f"{declared:g}s; the model counts its windows in declared steps, "
+              f"so a sample every {cadence:g}s fills them at a different rate",
+              file=sys.stderr)
+    horizon = float(args.horizon) if args.horizon is not None else cadence
+    if args.resident:
+        return _resident(args, declaration, model_path, manifest, cadence,
+                         horizon, unreadable_floor, ledger, history)
+    session = EngineSession(history=history, ledger=ledger)
     session.load_model(model_path)
 
     feed_result = feed(session, manifest, reports)
@@ -693,6 +730,27 @@ def _cmd_detect(args: argparse.Namespace) -> int:
             print(f"\n{notice}", file=sys.stderr)
     print(detect_as_text(outcome, feed_result))
 
+    if ledger is not None:
+        if args.walk:
+            # A recorded reading has no future anyone will read it against, so a
+            # forecast from it could only ever mature `ungradeable`.
+            print("\nledger: nothing filed -- recorded walks have no future a "
+                  "later run could read a forecast against", file=sys.stderr)
+        else:
+            issued, rolled, withheld = _file_forecasts(session, manifest,
+                                                       horizon, cadence)
+            for reason in withheld:
+                print(f"coupling filed nothing -- {reason}", file=sys.stderr)
+            print(f"\nfiled {issued} forecast(s)"
+                  + (f" and {rolled} coupling value(s)" if rolled else "")
+                  + f", {horizon:g}s ahead, into {args.ledger}")
+            print(_ledger_line(ledger))
+            if history is None:
+                print("a later run can grade these only against readings taken "
+                      "near the moment they mature, and this run's readings end "
+                      "with it: pass --history PATH, or run --resident",
+                      file=sys.stderr)
+
     # Composed, not merged. The worse of the four wins, and `2` outranks `1` because
     # could-not-complete is a different claim from something-got-worse. The config
     # floor is one of them: a run that could not read part of its own input has
@@ -706,6 +764,224 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     schema_floor = EXIT_INCOMPLETE if outcome.schema_mismatch else EXIT_CLEAN
     return _exit_contract.compose(stage1, outcome.exit_code,
                                   unreadable_floor, schema_floor)
+
+
+def _stores_refusal(args: argparse.Namespace) -> str | None:
+    """A flag combination that would do nothing, or record something false.
+
+    Refused rather than tolerated, on the family's rule: a flag that changes
+    nothing reads as a flag that worked.
+    """
+    if getattr(args, "history", None) and args.walk:
+        return ("--history keeps readings for a later run to grade forecasts "
+                "against, and a recorded walk has no instant of its own: its "
+                "readings are stamped in a ladder ending NOW, so writing them to "
+                "a durable store would put invented times into a record another "
+                "run trusts. Use --history with --target")
+    if args.resident and not args.target:
+        return ("--resident walks the same live target again and again; it "
+                "needs --target. Recorded walks already hold their whole history")
+    if args.resident and not getattr(args, "ledger", None):
+        return ("--resident exists to file forecasts and grade them as they "
+                "mature; without --ledger they would die with the process. "
+                "Pass --ledger PATH")
+    if not args.resident and (args.every is not None or args.cycles is not None):
+        return ("--every and --cycles set a resident run's cadence and length, "
+                "and this run is not resident; pass --resident, or drop them")
+    return None
+
+
+def _open_stores(args: argparse.Namespace) -> tuple[Any, Any]:
+    """The ledger a run files into and the history it grades against.
+
+    TWO STORES, BECAUSE GRADING NEEDS BOTH. A forecast is scored against the
+    reading nearest `predicted_at + horizon`, inside a grace window. A single
+    walk holds one reading, stamped at NOW -- which is after the window of
+    every forecast an earlier run filed -- so a durable ledger alone grades
+    everything `ungradeable`. The readings have to persist as well, and
+    `SqliteObservationHistory` is the engine's supported name for that.
+    """
+    ledger = history = None
+    if getattr(args, "ledger", None):
+        from arbiter_engine import SqlitePredictionLedger
+
+        ledger = SqlitePredictionLedger(args.ledger)
+    if getattr(args, "history", None):
+        from arbiter_engine import SqliteObservationHistory
+
+        if not hasattr(SqliteObservationHistory, "series_keys"):
+            # Before arbiter-engine 0.2.9 the durable store could not list its
+            # series, and describing a session built over it RAISED. Refused by
+            # name here rather than left to fail three calls later.
+            raise _StoresUnavailable(
+                "--history needs an engine whose durable store can list its "
+                "series, which arrived in arbiter-engine 0.2.9; "
+                "pip install --upgrade 'bmc-sensor-audit[detect]'")
+        history = SqliteObservationHistory(args.history)
+    return ledger, history
+
+
+class _StoresUnavailable(RuntimeError):
+    """The installed engine cannot hold what the flags asked it to."""
+
+
+#: The rollout's refusals that explain why a declared coupling filed NOTHING.
+#: Surfaced by name, because a run that files forecasts for the driver and none
+#: for the coupling reads as a coupling that is being graded when it is not.
+_COUPLING_FILING_REFUSALS = ("gain_not_adopted", "no_declared_tolerance")
+
+
+def _file_forecasts(session: Any, manifest: Any, horizon_s: float,
+                    step_s: float) -> tuple[int, int, list[str]]:
+    """File what this cycle predicts, so a later one has something to grade.
+
+    THE LEDGER WAS WIRED AND NOTHING FLOWED INTO IT. `detect` called `check`
+    and `model_describe`, and neither files a prediction -- measured, forty
+    walks through `--ledger` left zero rows. So `calibration()` could not be
+    non-null here however many horizons passed.
+
+    Two sources, and ONLY what the model declares. `project` files the
+    engine's own forecast of every indicator that declares dynamics, with a
+    random walk beside it as the yardstick; a coupling's driver carries one,
+    and nothing else here does. `rollout` files what a DECLARED coupling
+    predicts downstream, and only once its gain has been written down -- with
+    the gain withheld it declines by name and files nothing. No projector is
+    put on a sensor the declaration did not give one: that would grade a model
+    nobody chose.
+    """
+    from arbiter_engine.api import project, rollout
+
+    projection = project(session, horizon_s=horizon_s).to_dict()
+    issued = int(((projection.get("projection") or {}).get("checked") or {})
+                 .get("forecasts_issued", 0) or 0)
+    rolled, withheld = 0, []
+    if getattr(manifest, "coupled", None):
+        simulation = (rollout(session, horizon_s=horizon_s, step_s=step_s,
+                              file_predictions=True).to_dict()
+                      .get("simulation") or {})
+        rolled = int((simulation.get("checked") or {})
+                     .get("predictions_filed", 0) or 0)
+        # WHY A COUPLING FILED NOTHING, in the engine's words. With the gain
+        # written down, what stops the filing is the TOLERANCE: a coupling's
+        # value is graded against the spread its gain declares, and the
+        # supplemental format has no field for one -- so a written gain alone
+        # never reaches the ledger, and the run has to say so or it reads as a
+        # coupling being graded.
+        withheld = sorted({f"{d['reason']}: {d.get('detail', '')}"
+                           for d in simulation.get("not_checked") or []
+                           if d.get("reason") in _COUPLING_FILING_REFUSALS})
+    return issued, rolled, withheld
+
+
+def _ledger_line(ledger: Any) -> str:
+    """The ledger's own figures, with their denominators, in one line.
+
+    A rate is printed only once something has been graded -- before that the
+    honest figure is NONE, and a zero would read as a measurement.
+    """
+    cal = ledger.calibration()
+    graded = int(cal.get("confirmed", 0)) + int(cal.get("falsified", 0))
+    parts = [f"ledger: {cal.get('recorded', 0)} recorded, "
+             f"{cal.get('pending', 0)} pending, {graded} graded"]
+    if cal.get("ungradeable"):
+        parts.append(f"{cal['ungradeable']} ungradeable")
+    if graded:
+        parts.append(f"confirm_rate {cal['confirm_rate']:.2f} against an "
+                     f"expected {cal['expected_confirm_rate']:.2f}")
+    else:
+        parts.append("confirm_rate none yet -- nothing has matured")
+    for model_id, row in sorted((cal.get("by_model") or {}).items()):
+        parts.append(f"crps {model_id} {row['crps_approx']:.4g} (n={row['n']})")
+    own = cal.get("own_projections") or {}
+    if own.get("n"):
+        parts.append(f"coupling projections crps {own['crps_approx']:.4g} "
+                     f"(n={own['n']})")
+    return "; ".join(parts)
+
+
+def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
+              manifest: Any, cadence: float, horizon: float,
+              unreadable_floor: int, ledger: Any, history: Any) -> int:
+    """Walk one live target again and again, filing and grading as it goes.
+
+    E2 of the 0.2.7 verification asked for exactly this: a calibration figure
+    that no human had to re-run a command to produce. Each cycle opens a fresh
+    engine session over the SAME two stores, feeds this walk's readings,
+    checks -- which grades every forecast that has matured since -- and files
+    the next ones. So the first figure appears one horizon plus the ledger's
+    grace after the fifth reading, which is the fewest a forecast can be
+    fitted on.
+
+    Each cycle pins the engine's clock to its own start, so the readings it
+    feeds and the forecasts it files carry one instant between them.
+    """
+    from arbiter_engine.api import EngineSession, as_of, check, model_describe
+
+    from presence_audit.feeder import evaluate, feed
+    from presence_audit.report import detect_as_text
+
+    if history is None:
+        from arbiter_engine import InMemoryObservationHistory
+
+        history = InMemoryObservationHistory()
+    print(f"\nresident: walking {args.target} every {cadence:g}s and filing "
+          f"forecasts {horizon:g}s ahead into {args.ledger}"
+          + (f", for {args.cycles} cycle(s)" if args.cycles else
+             ", until interrupted"), file=sys.stderr)
+    client = _client(args)
+    worst: int | None = None
+    said_withheld: list[str] = []
+    cycle = 0
+    try:
+        while args.cycles is None or cycle < args.cycles:
+            cycle += 1
+            at = _now()
+            with as_of(at):
+                walk = walk_chassis(client)
+                report = compare(declaration, walk,
+                                 include_disabled_in_config=args.include_disabled)
+                if not report.walk_complete:
+                    code = EXIT_INCOMPLETE
+                    summary = "walk incomplete; nothing fed, nothing filed"
+                else:
+                    session = EngineSession(history=history, ledger=ledger)
+                    session.load_model(model_path)
+                    feed_result = feed(session, manifest, [report])
+                    envelope = check(session).to_dict()
+                    described = model_describe(session).to_dict()
+                    outcome = evaluate(envelope, described, manifest,
+                                       strict_declines=args.strict_declines,
+                                       feed_result=feed_result)
+                    if cycle == 1:
+                        print(as_text(report, target=args.target))
+                        print(detect_as_text(outcome, feed_result))
+                    issued, rolled, withheld = _file_forecasts(
+                        session, manifest, horizon, cadence)
+                    if withheld and withheld != said_withheld:
+                        for reason in withheld:
+                            print(f"coupling filed nothing -- {reason}",
+                                  file=sys.stderr)
+                        said_withheld = withheld
+                    stage1 = EXIT_REGRESSION if report.regressions else EXIT_CLEAN
+                    schema_floor = (EXIT_INCOMPLETE if outcome.schema_mismatch
+                                    else EXIT_CLEAN)
+                    code = _exit_contract.compose(stage1, outcome.exit_code,
+                                                  unreadable_floor, schema_floor)
+                    summary = (f"{len(report.regressions)} regression(s), "
+                               f"{len(outcome.findings)} finding(s); filed "
+                               f"{issued} forecast(s)"
+                               + (f" and {rolled} coupling value(s)"
+                                  if rolled else ""))
+                line = _ledger_line(ledger)
+            print(f"cycle {cycle} at {at:%Y-%m-%dT%H:%M:%SZ}: exit {code} -- "
+                  f"{summary}; {line}")
+            worst = code if worst is None else _exit_contract.compose(worst, code)
+            if args.cycles is None or cycle < args.cycles:
+                _sleep(cadence)
+    except KeyboardInterrupt:
+        print(f"\nresident: stopped after {cycle} cycle(s)", file=sys.stderr)
+    # No cycle completed is not a clean board: nothing was verified.
+    return EXIT_INCOMPLETE if worst is None else worst
 
 
 def _cmd_adopt(args: argparse.Namespace) -> int:
@@ -1156,10 +1432,31 @@ def build_parser() -> argparse.ArgumentParser:
                              "its URL; a BMC hostname names an internal machine and "
                              "an artifact uploaded from CI publishes it")
     detect.add_argument("--ledger", metavar="PATH",
-                        help="keep this run's predictions in a SQLite file so a "
-                             "later run can be graded against them; without it "
-                             "the engine keeps them in memory and they are gone "
-                             "when the process exits")
+                        help="file the engine's own forecasts into a SQLite "
+                             "ledger, so a later run -- or a later --resident "
+                             "cycle -- can grade them as they mature. Only what "
+                             "the model declares is forecast: a coupling's "
+                             "driver, and a coupling once its gain is written "
+                             "down. Recorded walks file nothing")
+    detect.add_argument("--history", metavar="PATH",
+                        help="keep the readings in a SQLite file too. A forecast "
+                             "is graded against the reading nearest the moment "
+                             "it matures, which one walk never holds, so a "
+                             "ledger shared between separate runs needs this. "
+                             "Live targets only")
+    detect.add_argument("--resident", action="store_true",
+                        help="walk the --target again and again in one process, "
+                             "grading each cycle's matured forecasts and filing "
+                             "the next; needs --ledger")
+    detect.add_argument("--every", type=float, metavar="SECONDS",
+                        help="how often a --resident run walks; defaults to the "
+                             "cadence the supplemental file declares, else 60")
+    detect.add_argument("--cycles", type=int, metavar="N",
+                        help="stop a --resident run after N walks; without it the "
+                             "run continues until interrupted")
+    detect.add_argument("--horizon", type=float, metavar="SECONDS",
+                        help="how far ahead each forecast is filed; defaults to "
+                             "one collection step")
     detect.set_defaults(func=_cmd_detect)
 
     adopt = subparsers.add_parser(

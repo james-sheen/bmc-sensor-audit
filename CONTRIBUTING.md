@@ -58,3 +58,17 @@ The suite has two honest populations: without the `[detect]` extra (Stage 1,
 dependency-free) and with it. Both are green at head; the exact counts live in
 the README's Tests row, which is enforced by a test rather than promised by a
 sentence.
+
+**Verifying an unreleased engine.** The engine's master carries a pre-release
+version (`0.2.9.dev0`, say), and the engine tests refuse it: the pin is plain
+`X.Y.Z`, so a pre-release is outside it. That is deliberate, and it is also the
+one check worth running before an engine ships. Name the version you mean and
+the door opens for it alone:
+
+    pip install 'arbiter-engine @ git+https://github.com/james-sheen/arbiter@master'
+    BSA_VERIFY_ENGINE_PRERELEASE=$(python3 -c "import importlib.metadata as m; print(m.version('arbiter-engine'))") \
+        python3 -m pytest
+
+The value must match the installed version exactly, so a variable left set in
+a shell shuts the door again the moment the engine moves. The scheduled
+`engine canary` workflow runs this against master every day.

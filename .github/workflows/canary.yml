@@ -28,6 +28,45 @@ on:
       - ".github/workflows/canary.yml"
 
 jobs:
+  engine-master:
+    # The same suite against the engine's MASTER, before it is a release.
+    #
+    # The job below tests the RANGE, which only ever holds releases. An engine
+    # regression therefore reached this bridge on the index, after the version
+    # was spent, and the one workflow that could have caught it first -- the
+    # suite against the engine's master -- could not run here: master carries a
+    # pre-release version, the suite's pin guard refuses anything outside plain
+    # X.Y.Z, and 54 tests errored at setup. The guard has admitted a pre-release
+    # the caller NAMES since 2026-09-02; nothing ever named one.
+    #
+    # The name is DERIVED from what pip installed, never typed here, so this job
+    # admits exactly the build it is testing and a stale value cannot exist.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the engine from its master branch
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml pytest \
+            "arbiter-engine @ git+https://github.com/james-sheen/arbiter@master" \
+            $(python3 tools/runtime_deps.py)
+          echo "resolved:"
+          python3 -m pip show arbiter-engine | sed -n 's/^Version: /  arbiter-engine /p'
+
+      - name: The whole suite, with the installed pre-release named
+        run: |
+          set -euo pipefail
+          INSTALLED=$(python3 -c "import importlib.metadata as m; print(m.version('arbiter-engine'))")
+          echo "  verifying arbiter-engine ${INSTALLED} against this bridge"
+          BSA_VERIFY_ENGINE_PRERELEASE="${INSTALLED}" python3 -m pytest tests/ -q
+
   canary:
     runs-on: ubuntu-latest
     steps:

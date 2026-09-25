@@ -185,7 +185,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **833** collected with PyYAML installed, **807** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **865** collected with PyYAML installed, **839** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -707,10 +707,17 @@ identical thresholds. So they come from an operator-declared file passed with
 multi-channel parts as *candidates* and asserts nothing about them.
 
 Two example files ship in [`examples/supplemental/`](examples/supplemental). One is
-**worked** — every entry in `ampere-mtjade.json` is established by the vendored
-configuration plus the PMBus commands its labels name, and it declares no
-redundant group and no counter, because neither can be established from a
-configuration file. The other is a **template**, and its placeholder names match
+**worked** — every entry in `ampere-mtjade.json` is established by a vendored vendor
+file, and it declares no redundant group and no counter, because neither can be
+established from a configuration file. Its two flows come from the platform's
+`entity-manager` configuration plus the PMBus commands its labels name. Its one
+**coupling** — `TS4_Temp` drives `FAN3_1` — comes from the platform's own
+**phosphor-fan-control** configuration, vendored and pinned under
+[`tests/fixtures/fan-control/ampere-mtjade/`](tests/fixtures/fan-control/ampere-mtjade):
+the firmware maps that ambient temperature to the zone's fan target. That is a
+control law, not airflow physics, and the gain is withheld because the map is in
+PWM counts and the reading is RPM. A test reads every clause of its basis back out
+of the vendored files. The other is a **template**, and its placeholder names match
 nothing on purpose: a run against it unedited stops and names every line still to
 be filled in, rather than checking nothing and reporting agreement.
 
@@ -764,6 +771,44 @@ measurement leaves nobody able to say what the model asserts. What makes this
 different is the distance: a separate distribution, a separate command, a
 proposal named by a person, and a basis in the file. Take any one of those away
 and it is the thing the engine refuses.
+
+### Filing forecasts, and grading them as they mature
+
+`--ledger PATH` files the engine's own forecasts into a SQLite ledger, so a later
+cycle can grade them against what the board then read. **Only what the model
+declares is forecast**: a coupling's driver carries a projector, and the engine
+files a random walk beside each of its forecasts as the yardstick. A sensor
+nobody declared a coupling for is not forecast at all, because that would grade
+a model nobody chose.
+
+```
+bmc-sensor-audit detect --config <entity-manager-configs> --target https://<bmc> \
+                 --supplemental supplemental.json \
+                 --resident --ledger ledger.sqlite
+```
+
+`--resident` walks the same target again and again in one process — every
+`--every` seconds, the supplemental file's declared cadence by default — and each
+cycle grades whatever has matured before filing the next forecast
+`--horizon` seconds ahead. Each cycle prints one line: what the ledger holds and
+how much of it is graded, the confirm rate beside the rate the bands promised, and
+the forecast's CRPS beside the random walk's, each with its count. **Before
+anything matures it says `none yet`**, because a zero would read as a measurement.
+`--cycles N` stops it; otherwise it runs until interrupted.
+
+**Separate runs need the readings too.** A forecast is graded against the reading
+nearest the moment it matures, and one walk holds one reading, stamped when it was
+taken. So a ledger shared between runs started by `cron` grades nothing unless the
+readings persist as well. `--history PATH` keeps them, and a run without it says
+so. It needs `arbiter-engine` 0.2.9 or later: before that, the engine's durable
+store could not be described, and the ledger graded nothing read through it.
+
+**What is not graded yet.** A coupling's own projection is graded against the
+spread its gain declares, and the supplemental format has no field for one. So a
+coupling files nothing even after `adopt` writes its gain down, and the run names
+the engine's reason, `no_declared_tolerance`, rather than reading as a coupling
+being graded. And **no real board has produced one of these figures**: every number
+here so far came from a bench whose readings were generated.
 
 **A per-run record.** `--attest-out` writes what was checked, what was **declined**,
 and the measurement behind every finding — the reading, the threshold it crossed and

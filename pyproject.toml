@@ -103,7 +103,15 @@ dependencies = ["presence-audit>=0.1.10,<0.2"]
 # surprises)`, and on 0.2.6 that function takes one argument. It is the gate
 # this command turns on, so below the floor `adopt` cannot refuse a number that
 # would have changed nothing, which is the discipline it exists to apply.
-detect = ["arbiter-engine>=0.2.7,<0.3"]
+#
+# 0.2.9 IS THE FLOOR BECAUSE `--history` NEEDS A DURABLE STORE THE ENGINE CAN
+# DESCRIBE AND GRADE THROUGH. Measured on 0.2.8: a session over
+# `SqliteObservationHistory` raised in `model_describe`, and the ledger graded
+# NONE of its forecasts -- every one `ungradeable`, because it read the
+# in-memory store's private series and skipped any other. `detect --history`
+# refuses by name below the floor rather than failing three calls later, and
+# the suite's two history tests are what hold that 0.2.8 is below it.
+detect = ["arbiter-engine>=0.2.9,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]
