@@ -848,6 +848,18 @@ def _file_forecasts(session: Any, manifest: Any, horizon_s: float,
     the gain withheld it declines by name and files nothing. No projector is
     put on a sensor the declaration did not give one: that would grade a model
     nobody chose.
+
+    THE ROLLOUT IS SEEDED FROM THE DRIVER'S FORECAST, AND UNTIL 0.3.5 IT WAS
+    NOT. Seeded from the current readings with no action scheduled, a rollout
+    moves nothing: every value is held at its reading, nothing any coupling
+    predicts is in it, and the engine declined all of it
+    `no_declared_tolerance` -- whose remedy, a declared spread, cannot help a
+    value nothing moved. Measured on a bench: an adopted gain filed nothing
+    for sixteen cycles WITH a spread declared. Seeded from the forecast, the
+    driver moves, the coupling carries the move downstream, and the forecast's
+    own band passes through the gain -- so an adopted gain is graded with or
+    without a declared spread, which only widens that band by the gain's own
+    doubt.
     """
     from arbiter_engine.api import project, rollout
 
@@ -857,16 +869,13 @@ def _file_forecasts(session: Any, manifest: Any, horizon_s: float,
     rolled, withheld = 0, []
     if getattr(manifest, "coupled", None):
         simulation = (rollout(session, horizon_s=horizon_s, step_s=step_s,
+                              seed_mode="projected",
                               file_predictions=True).to_dict()
                       .get("simulation") or {})
         rolled = int((simulation.get("checked") or {})
                      .get("predictions_filed", 0) or 0)
-        # WHY A COUPLING FILED NOTHING, in the engine's words. With the gain
-        # written down, what stops the filing is the TOLERANCE: a coupling's
-        # value is graded against the spread its gain declares, and the
-        # supplemental format has no field for one -- so a written gain alone
-        # never reaches the ledger, and the run has to say so or it reads as a
-        # coupling being graded.
+        # WHY A COUPLING FILED NOTHING, in the engine's words, or it reads as
+        # a coupling being graded.
         withheld = sorted({f"{d['reason']}: {d.get('detail', '')}"
                            for d in simulation.get("not_checked") or []
                            if d.get("reason") in _COUPLING_FILING_REFUSALS})

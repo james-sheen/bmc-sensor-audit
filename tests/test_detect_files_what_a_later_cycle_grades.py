@@ -223,41 +223,68 @@ class TestAResidentRunGradesItsOwnForecasts:
         assert any(m.startswith("baseline") for m in by_model), by_model
 
 
-class TestACouplingSaysWhyItFiledNothing:
-    """A written gain is not enough for a coupling's projection to be graded.
+def _coupled_run(bench, capsys, cycles, **supplemental):
+    _engine()
+    ledger = bench["tmp"] / "ledger.sqlite"
+    path = _supplemental(bench["tmp"], **supplemental)
+    cli.main(_argv(bench, "--resident", "--ledger", str(ledger),
+                   "--cycles", str(cycles), supplemental=path))
+    out = capsys.readouterr()
+    return _calibration(ledger), out.out, out.err
 
-    MEASURED while writing this file. With the gain written down the rollout
-    runs, and declines `no_declared_tolerance`: a coupling's imagined value is
-    graded against the spread its gain declares, and the supplemental format
-    has no field for a spread -- it refuses `gain_sigma` by name. So through
-    this format a coupling's projections never reach the ledger, adopted or
-    not. The run says which of the two refusals it met; silence would read as
-    a coupling being graded.
+
+class TestAWrittenGainIsGraded:
+    """A coupling's own projection reaches the ledger once its gain is written.
+
+    UNTIL 0.3.5 IT NEVER DID, AND THE REASON WAS MISREAD. The rollout that files
+    it was seeded from the CURRENT readings with no action scheduled, which
+    moves nothing: every value is held at its reading, so nothing any coupling
+    predicts is in it. The engine declined all of it `no_declared_tolerance`,
+    naming a declared spread as the remedy, and this class pinned that as the
+    limitation -- written or withheld, nothing graded. A declared spread files
+    nothing on such a rollout either; that was measured too. Seeded from the
+    driver's forecast, the driver moves, the coupling carries the move
+    downstream, and the forecast's own band passes through the gain.
     """
+
+    CYCLES = 16
+
+    def test_it_reaches_the_coupling_leg_of_the_calibration(self, bench, capsys):
+        cal, _out, err = _coupled_run(bench, capsys, self.CYCLES,
+                                      gain=TRUE_GAIN)
+        assert cal["own_projections"]["n"] > 0, (cal["own_projections"], err)
+        assert "coupling filed nothing" not in err, err
+
+    def test_its_yardstick_is_filed_beside_it(self, bench, capsys):
+        """A coupling's figure alone cannot say whether the gain carries
+        information; the engine races a random walk beside each projection."""
+        cal, _out, _err = _coupled_run(bench, capsys, self.CYCLES,
+                                       gain=TRUE_GAIN)
+        assert cal["own_projections"]["baseline"]["n"] > 0, cal["own_projections"]
+
+    def test_the_cycle_line_reports_it_with_its_count(self, bench, capsys):
+        _cal, out, _err = _coupled_run(bench, capsys, self.CYCLES,
+                                       gain=TRUE_GAIN)
+        lines = [l for l in out.splitlines() if l.startswith("cycle ")]
+        assert any("coupling projections crps" in l for l in lines), lines[-1]
+        assert any("coupling value(s)" in l for l in lines), lines[-1]
+
+
+class TestAWithheldGainSaysWhyItFiledNothing:
+    """With the gain withheld the coupling projects nothing, which is the
+    format's rule; the run names the engine's reason, and silence would read
+    as a coupling being graded."""
 
     CYCLES = 8
 
-    def _run(self, bench, capsys, **supplemental):
-        _engine()
-        ledger = bench["tmp"] / "ledger.sqlite"
-        path = _supplemental(bench["tmp"], **supplemental)
-        cli.main(_argv(bench, "--resident", "--ledger", str(ledger),
-                       "--cycles", str(self.CYCLES), supplemental=path))
-        return _calibration(ledger), capsys.readouterr().err
-
-    @pytest.mark.parametrize("gain", ["estimate", TRUE_GAIN])
-    def test_written_or_withheld_it_is_refused_for_want_of_a_tolerance(
-            self, bench, capsys, gain):
-        """The tolerance is checked before the gain matters: with nothing
-        declared to grade against, a written gain and a withheld one file the
-        same nothing, and the engine names the same reason for both."""
-        cal, err = self._run(bench, capsys, gain=gain)
+    def test_it_names_the_withheld_gain(self, bench, capsys):
+        cal, _out, err = _coupled_run(bench, capsys, self.CYCLES)
         assert cal["own_projections"]["n"] == 0
-        assert "coupling filed nothing -- no_declared_tolerance" in err, err
+        assert "coupling filed nothing -- gain_not_adopted" in err, err
 
     def test_it_is_said_once_not_every_cycle(self, bench, capsys):
-        _, err = self._run(bench, capsys)
-        assert err.count("coupling filed nothing") == 1, err
+        _cal, _out, err = _coupled_run(bench, capsys, self.CYCLES)
+        assert err.count("gain_not_adopted") == 1, err
 
 
 class TestSeparateRunsNeedTheReadingsToo:

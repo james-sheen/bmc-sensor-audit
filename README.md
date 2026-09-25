@@ -193,7 +193,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **865** collected with PyYAML installed, **839** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **867** collected with PyYAML installed, **841** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -811,12 +811,18 @@ readings persist as well. `--history PATH` keeps them, and a run without it says
 so. It needs `arbiter-engine` 0.2.9 or later: before that, the engine's durable
 store could not be described, and the ledger graded nothing read through it.
 
-**What is not graded yet.** A coupling's own projection is graded against the
-spread its gain declares, and the supplemental format has no field for one. So a
-coupling files nothing even after `adopt` writes its gain down, and the run names
-the engine's reason, `no_declared_tolerance`, rather than reading as a coupling
-being graded. And **no real board has produced one of these figures**: every number
-here so far came from a bench whose readings were generated.
+**A coupling is graded once its gain is written down.** Each cycle also rolls the
+model forward from the driver's own forecast, so the coupling carries the
+forecast move downstream and files what it predicts for the reading it drives,
+with a random walk beside it; the cycle line adds `coupling projections crps`
+with its count. The band it is graded against is the driver's forecast doubt
+passed through the gain. With `gain: estimate` it files nothing and the run says
+`gain_not_adopted`. Until 0.3.5 the roll-forward started from the current
+readings, which moves nothing when no action is scheduled, so a coupling was
+never graded, adopted or not; the engine named a missing spread as the reason,
+and a spread filed nothing either. And **no real board has produced one of these
+figures**: every number here so far came from a bench whose readings were
+generated.
 
 **A per-run record.** `--attest-out` writes what was checked, what was **declined**,
 and the measurement behind every finding — the reading, the threshold it crossed and
