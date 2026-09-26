@@ -1,6 +1,6 @@
 {
-  "format": "presence-audit/supplemental/2",
-  "provenance": "Worked example for the Ampere Mt.Jade configuration vendored at tests/fixtures/upstream/ampere/mtjade.json. The two flows are established by that file plus the PMBus command set the labels name. The one coupling is established by a SECOND vendor source: the platform's phosphor-fan-control configuration, vendored and pinned at tests/fixtures/fan-control/ampere-mtjade/, which is the firmware's own statement of which reading sets the fans. NOTHING HERE IS A SCHEMATIC OR THERMAL CLAIM: no redundant group and no counter is declared, because neither can be established from a configuration file, and no coupling runs from a fan to a temperature, because that is airflow physics no document here states. An ODM holding the board schematic and the thermal design is the party that can add them -- see TEMPLATE.json. sampling_interval_s is the cadence this example ASSUMES a collector walks at; replace it with your own, and read the coupling's basis on what a faster cadence changes.",
+  "format": "presence-audit/supplemental/4",
+  "provenance": "Worked example for the Ampere Mt.Jade configuration vendored at tests/fixtures/upstream/ampere/mtjade.json. The two flows are established by that file plus the PMBus command set the labels name. The one coupling is established by a SECOND vendor source: the platform's phosphor-fan-control configuration, vendored and pinned at tests/fixtures/fan-control/ampere-mtjade/, which is the firmware's own statement of which reading sets the fans. NOTHING HERE IS A SCHEMATIC OR THERMAL CLAIM: no redundant group and no counter is declared, because neither can be established from a configuration file, and no coupling runs from a fan to a temperature, because that is airflow physics no document here states. The one fault channel does run that way, and it states less: only that the firmware puts the fan and the reading in one zone, so a failure can travel from one to the other. How strongly is the physics, and no weight is declared. An ODM holding the board schematic and the thermal design is the party that can add them -- see TEMPLATE.json. sampling_interval_s is the cadence this example ASSUMES a collector walks at; replace it with your own, and read the coupling's basis on what a faster cadence changes.",
   "sampling_interval_s": 60,
   "flows": [
     {
@@ -27,6 +27,13 @@
       "response_model": "step",
       "gain": "estimate",
       "basis": "The vendor's fan-control configuration sets this fan FROM this temperature. In the pinned phosphor-fan files, groups.json puts TS4_Temp in zone0_ambient and FAN3 in air_cooled_zone0_fans, and events.json target_mapping_from_TS_temp maps the ambient temperature to the zone's fan target through a table that never decreases, 38 of 255 at 10 C to 89 of 255 at 50 C. So the direction is the firmware's: temperature in, fan out. It is a control law and not airflow physics, and the vendor files this reading as the zone's AMBIENT one -- a temperature a fan barely moves, which is what lets a fit read it as a driver. THE GAIN IS WITHHELD: the table is in PWM counts and the reading is RPM, and the fan curve between them is not in these files. THE FIT WILL SEE TWO REGIMES: five more mappings drive the same zone from the SoC, DIMM, OCP and NVMe groups, and the zone takes the maximum any of them requests, so TS4_Temp moves this fan only while its own mapping is the highest. TIMING: zones.json throttles increases to 5 s and decreases to 30 s, so at a collection cadence of 30 s or longer the response lands inside one step -- a step with no delay. time_constant_s is that slower 30 s bound; a step does not read it. The other eleven zone-0 rotors are the same claim and are not repeated here."
+    }
+  ],
+  "fault_channels": [
+    {
+      "from": "FAN3_1",
+      "to": "TS4_Temp",
+      "basis": "The same pinned phosphor-fan files that carry the coupling put this fan and this temperature in one zone: groups.json puts FAN3 in air_cooled_zone0_fans and TS4_Temp in zone0_ambient. A fan that stops cannot cool its zone, so a failure of FAN3_1 is one way TS4_Temp can move -- the reverse of the coupling, which is the control law. NO WEIGHT: how far a stopped fan moves this reading is airflow physics no file here states, and the vendor files TS4_Temp as the zone's AMBIENT reading, one a fan barely moves, so the channel may be a weak one. Ranking along it needs a strength somebody measured; until then the engine's answer is cpt_missing, which is the true one."
     }
   ]
 }

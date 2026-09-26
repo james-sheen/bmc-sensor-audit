@@ -50,14 +50,18 @@ def point_changes(old: LiveSensor, new: LiveSensor, *,
             "units_changed", new.name,
             f"units were {old.units!r}, are now {new.units!r}",
             old.path, new.path))
+    # In the core's own word, which both cores in this package's range score and
+    # rank: 0.1.13 reads either spelling and 0.2.0 only this one. The report
+    # still says `sensor_disabled`, because the writers are asked to spell kinds
+    # in this vertical's noun.
     if old.is_enabled and not new.is_enabled:
         changes.append(Change(
-            "sensor_disabled", new.name,
+            "point_disabled", new.name,
             f"was enabled and now reports State={new.state!r}. A disabled sensor "
             f"is typically invisible in the web UI", old.path, new.path))
     elif not old.is_enabled and new.is_enabled:
         changes.append(Change(
-            "sensor_enabled", new.name,
+            "point_enabled", new.name,
             f"was State={old.state!r} and is now enabled", old.path, new.path))
     if old.reading is not None and new.reading is None and new.is_enabled:
         changes.append(Change(

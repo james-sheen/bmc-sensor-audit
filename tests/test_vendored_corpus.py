@@ -354,7 +354,7 @@ class TestTheEndToEndDiffReproducesFromAClone:
         of omitting sensors it declares as `Name1`. If this count leaves zero,
         that accusation is back."""
         undeclared = [f for f in report.findings if f.kind == "undeclared_present"]
-        assert undeclared == [], [f.sensor for f in undeclared]
+        assert undeclared == [], [f.point for f in undeclared]
 
     def test_the_quantity_named_channel_is_declared_from_the_pinned_file(self):
         """`bletchley_frontpanel.json` at this pin spells the humidity channel

@@ -85,7 +85,14 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # gain whose spread no reader can load. MEASURED both ways:
 # `tests/test_adopt_writes_the_spread_beside_the_gain.py` is 5 failed / 6 passed
 # / 11 errors on 0.1.10 and 22 passed on the tree that becomes 0.1.11.
-dependencies = ["presence-audit>=0.1.11,<0.2"]
+#
+# THE FLOOR MOVED TO 0.1.13 BECAUSE THE WRITER MOVED THERE, AND THE CEILING TO 0.3.
+# `presence-audit` 0.1.13 names its subject `point` and took `adopt`'s writer over
+# as `presence_audit.adopt`, which this package now calls -- so below it the
+# command has nothing to call. Its 0.2.0 removes the old names, which this package
+# no longer writes: the suite was run against a 0.2.0 build as well as 0.1.13
+# before the ceiling admitted it.
+dependencies = ["presence-audit>=0.1.13,<0.3"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
@@ -119,7 +126,15 @@ dependencies = ["presence-audit>=0.1.11,<0.2"]
 # in-memory store's private series and skipped any other. `detect --history`
 # refuses by name below the floor rather than failing three calls later, and
 # the suite's two history tests are what hold that 0.2.8 is below it.
-detect = ["arbiter-engine>=0.2.9,<0.3"]
+#
+# 0.2.13 IS THE FLOOR BECAUSE THE LOOP ASKS FOR THE CASE BOOK. `tests/test_the_loop_runs.py`
+# drives every stage the engine offers on this domain -- sense, model, a ranking of
+# declared causes, a plan, an executed action, a fitted gain and a case opened and
+# resolved -- and the case book and the per-stage report in `model_describe`
+# arrived in 0.2.13, as did the decline beside a cause the ranking cannot score
+# (`cpt_missing`), which `detect` prints. Below it the loop has a stage the
+# engine cannot answer.
+detect = ["arbiter-engine>=0.2.13,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]

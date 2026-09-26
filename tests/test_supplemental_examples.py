@@ -75,7 +75,10 @@ class TestEveryShippedFileIsWellFormed:
             supplemental = load_supplemental(path)
             bases = ([g.basis for g in supplemental.redundant_groups]
                      + [c.basis for c in supplemental.counters]
-                     + [f.basis for f in supplemental.flows])
+                     + [f.basis for f in supplemental.flows]
+                     + [c.basis for c in supplemental.couplings]
+                     + [c.basis for c in supplemental.fault_channels]
+                     + [a.basis for a in supplemental.actions])
             for basis in bases:
                 assert len(basis) > 60, f"{path.name}: {basis!r} is not a basis"
 
@@ -149,6 +152,16 @@ class TestTheTemplateCannotRunUnedited:
         declarations undocumented by example."""
         template = load_supplemental(EXAMPLES / "TEMPLATE.json")
         assert template.redundant_groups and template.counters and template.flows
+
+    def test_it_demonstrates_the_blocks_format_4_added(self):
+        """A fault channel runs the way a failure travels, often opposite to a
+        coupling, and an action is something an operator can set. Each ships
+        with a placeholder and a basis saying what belongs there, and the
+        channel with no weight, because an example that showed one would teach
+        guessing it."""
+        template = load_supplemental(EXAMPLES / "TEMPLATE.json")
+        assert template.fault_channels and template.actions
+        assert all(c.weight is None for c in template.fault_channels)
 
     def test_it_says_it_is_a_template_where_a_reader_looks_first(self):
         raw = json.loads((EXAMPLES / "TEMPLATE.json").read_text())

@@ -1,16 +1,22 @@
-# `presence-audit/attestation/1`
+# `presence-audit/attestation/2`
 
 A per-run record of what was checked, what was **declined**, and the measurement
 behind every finding. Written by `detect --attest-out FILE`, checked by
 `validate-attestation FILE`, and produced daily by this repository's canary from
-vendored inputs so there is always a current example to read.
+vendored inputs so there is always a current example to read. **From 0.3.7 the
+command writes `/2`**, and `validate-attestation` still reads
+`presence-audit/attestation/1`, so an artifact written before is still checked.
 
 **The versioning rule, first, because everything below depends on it.** Within
-`/1` this format may gain keys and may never change the meaning of one. A meaning
-change is `/2`. So a reader may write code that ignores keys it does not know, and
-may not write code that assumes a key it does know has kept a meaning across a
-major bump. This mirrors the discipline the engine applies to its own envelope,
-and for the same reason: the consumer is downstream of two contracts, not one.
+one id this format may gain keys and may never change the meaning of one. A
+meaning change is a new id. `/2` is the core's id for entries keyed on its own
+`point`; this command asks the core to spell them in this package's noun as
+well, so every entry still carries `sensor`, and each key `/1` carried is still
+there and means what it did. So a reader may write code that ignores keys it
+does not know, and may not write code that assumes a key it does know has kept
+a meaning across a major bump. This mirrors the discipline the engine applies
+to its own envelope, and for the same reason: the consumer is downstream of two
+contracts, not one.
 
 ## Reading one without installing anything
 
@@ -25,18 +31,18 @@ check a file somebody sent them. Exit `0` valid, `1` problems listed on stderr,
 
 ## Fields
 
-Every key the builder writes today. *Stability* is the promise made within `/1`.
+Every key the builder writes today. *Stability* is the promise made within `/2`.
 
 | Key | Type | Meaning | Stability |
 |---|---|---|---|
-| `format` | string | `presence-audit/attestation/1`. The contract this file claims. | Fixed; a change is a new major |
+| `format` | string | `presence-audit/attestation/2` (`/1` before 0.3.7). The contract this file claims. | Fixed; a change is a new major |
 | `target` | string | What was audited — a Redfish URL, or the path of the recorded walk. **May name an internal host; see the note below.** | Present, may be null for an unnamed source |
 | `engine.schema_version` | integer | The envelope contract the judgment was made **under**. This is the artifact's provenance chain into the engine, and it is not the engine's release number. | Present whenever the engine stamped one |
 | `engine.boundary` | string | **The engine's own statement of what its evidence does and does not establish**, quoted verbatim. | Present **whenever `evidence` is**; wording is the engine's, not ours |
 | `checked` | object | `{invariants, entities}` — the denominator. How many questions were asked, over how many things. | Keys may be added |
-| `findings` | array | What went wrong. Each carries `sensor` (the name on the board), `entity_type` (the sanitised form the engine used), `axiom`, `severity`, `problem_type`, and `statement` — the finding rendered in the operator's own vocabulary. | Entries may gain keys |
-| `not_checked` | array | **What could not be evaluated, and why.** Each carries `sensor`, `axiom`, `reason` and `detail`. | Entries may gain keys |
-| `evidence` | array | The numbers. One per finding: `sensor`, `axiom`, `problem_type`, `confidence`, `boundary`, and `measurement` — the reading, the threshold it crossed, which side of the band, as the engine reported them. | One per finding; see the invariant below |
+| `findings` | array | What went wrong. Each carries `sensor` (the name on the board) and, from `/2`, the same name under `point`, `entity_type` (the sanitised form the engine used), `axiom`, `severity`, `problem_type`, and `statement` — the finding rendered in the operator's own vocabulary. | Entries may gain keys |
+| `not_checked` | array | **What could not be evaluated, and why.** Each carries `sensor` and `point`, `axiom`, `reason` and `detail`. | Entries may gain keys |
+| `evidence` | array | The numbers. One per finding: `sensor` and `point`, `axiom`, `problem_type`, `confidence`, `boundary`, and `measurement` — the reading, the threshold it crossed, which side of the band, as the engine reported them. | One per finding; see the invariant below |
 | `unattested` | array | Problem types the engine declined to attest, each with its reason. Empty is the normal case. | Present, possibly empty |
 | `unread_feeds` | array | Observations that were fed and that nothing in the model read. | Present, possibly empty |
 

@@ -63,7 +63,7 @@ def test_the_dell_case_a_sensor_that_vanished():
         {"Name": "Fan 1 Tach", "Reading": 6100})
     report = compare(_declaration(), walk)
     absent = [f for f in report.findings if f.kind == "declared_absent"]
-    assert [f.sensor for f in absent] == ["CMOS Battery"]
+    assert [f.point for f in absent] == ["CMOS Battery"]
     assert report.exit_code == 1
 
 
@@ -78,7 +78,7 @@ def test_the_dgx_case_present_but_switched_off():
     report = compare(_declaration(), walk)
     assert _kinds(report) == {"declared_disabled"}
     finding = report.findings[0]
-    assert finding.sensor == "CMOS Battery"
+    assert finding.point == "CMOS Battery"
     assert "Disabled" in finding.detail
 
 
@@ -114,7 +114,7 @@ def test_the_reverse_direction_is_reported():
         {"Name": "Mystery Rail", "Reading": 12.0})
     report = compare(_declaration(), walk)
     undeclared = [f for f in report.findings if f.kind == "undeclared_present"]
-    assert [f.sensor for f in undeclared] == ["Mystery Rail"]
+    assert [f.point for f in undeclared] == ["Mystery Rail"]
     # Informational, not a regression: an extra sensor is not a coverage failure.
     assert report.exit_code == 0
 

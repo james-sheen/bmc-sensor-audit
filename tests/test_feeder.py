@@ -77,7 +77,7 @@ class TestOnlyPresentAndReadingIsFed:
 
     def test_a_reading_sensor_is_fed(self, built):
         declaration, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         session = StubSession()
         result = feed(session, manifest,
                       [_report(declaration, [(sensor.declared_name, 1.0, "Enabled")])])
@@ -86,7 +86,7 @@ class TestOnlyPresentAndReadingIsFed:
 
     def test_a_present_but_disabled_sensor_is_not_fed(self, built):
         declaration, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         session = StubSession()
         result = feed(session, manifest,
                       [_report(declaration, [(sensor.declared_name, 1.0, "Disabled")])])
@@ -101,7 +101,7 @@ class TestOnlyPresentAndReadingIsFed:
         reading arrives unmodified and nothing else arrives beside it -- a
         surviving mirror would feed a value no indicator reads."""
         declaration, _, manifest = built
-        sensor = next(s for s in manifest.sensors if s.has_lower)
+        sensor = next(s for s in manifest.points if s.has_lower)
         session = StubSession()
         feed(session, manifest,
              [_report(declaration, [(sensor.declared_name, 2.5, "Enabled")])])
@@ -113,7 +113,7 @@ class TestOnlyPresentAndReadingIsFed:
         one. Two series where the model declares one indicator is an unread feed,
         and the engine reports those only if something asks."""
         declaration, _, manifest = built
-        sensor = next(s for s in manifest.sensors if s.has_lower)
+        sensor = next(s for s in manifest.points if s.has_lower)
         session = StubSession()
         feed(session, manifest,
              [_report(declaration, [(sensor.declared_name, v, "Enabled")])
@@ -128,7 +128,7 @@ class TestOnlyPresentAndReadingIsFed:
 class TestLivenessWarmsUpAndSaysSo:
     def test_one_walk_is_one_sample(self, built):
         declaration, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         session = StubSession()
         result = feed(session, manifest,
                       [_report(declaration, [(sensor.declared_name, 1.0, "Enabled")])])
@@ -136,7 +136,7 @@ class TestLivenessWarmsUpAndSaysSo:
 
     def test_history_accumulates_across_walks(self, built):
         declaration, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         reports = [_report(declaration, [(sensor.declared_name, 1.0 + i, "Enabled")])
                    for i in range(12)]
         session = StubSession()
@@ -150,7 +150,7 @@ class TestLivenessWarmsUpAndSaysSo:
         """A tool that hid this would look like it was checking liveness from the
         first walk, which is the vacuous pass this project finds in other systems."""
         declaration, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         session = StubSession()
         result = feed(session, manifest,
                       [_report(declaration, [(sensor.declared_name, 1.0, "Enabled")])])
@@ -158,7 +158,7 @@ class TestLivenessWarmsUpAndSaysSo:
 
     def test_warming_up_clears_at_the_floor(self, built):
         declaration, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         reports = [_report(declaration, [(sensor.declared_name, 1.0 + i, "Enabled")])
                    for i in range(STUCK_AT_SAMPLE_FLOOR)]
         session = StubSession()
@@ -180,7 +180,7 @@ class TestTheExitCodeContract:
 
     def test_a_finding_fails_the_gate(self, built):
         _, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         outcome = self._outcome(manifest, findings=[{
             "entity_id": sensor.entity_type, "severity": "critical",
             "problem_type": f"threshold_exceeded:{READING}",
@@ -383,7 +383,7 @@ class TestTheEnvelopeSchemaVersionIsChecked:
         operator with a warning and no evidence; keeping them unlabelled would
         present a reading taken through the wrong contract as a verdict."""
         _, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         envelope = self._envelope(99, findings=[
             {"entity_id": sensor.entity_type, "severity": "critical",
              "problem_type": "threshold_exceeded:reading",

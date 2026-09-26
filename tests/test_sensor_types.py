@@ -126,7 +126,7 @@ class TestAHealthyBoardIsClean:
         assert report.counts()["unrecognised_type"] == 1
         assert report.exit_code == 0, "an unclassifiable type must not fail the gate"
         assert any(s.name == "Mystery"
-                   for s in report.not_sensor_kinds[st.UNRECOGNISED])
+                   for s in report.not_point_kinds[st.UNRECOGNISED])
 
     def test_a_genuinely_missing_sensor_is_still_a_regression(self, tmp_path):
         """The paired negative, and the one that matters most. A filter that silenced
@@ -134,4 +134,4 @@ class TestAHealthyBoardIsClean:
         entries = self.ENTRIES + [{"Name": "Outlet Temp", "Type": "TMP75"}]
         report = compare(_config(tmp_path, entries), _walk(["Inlet Temp"]))
         assert report.exit_code == 1, "a real sensor that vanished no longer fails"
-        assert any(f.sensor == "Outlet Temp" for f in report.regressions)
+        assert any(f.point == "Outlet Temp" for f in report.regressions)

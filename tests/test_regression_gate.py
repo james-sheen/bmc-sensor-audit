@@ -21,6 +21,7 @@ import pytest
 from presence_audit.diff import compare
 from bmc_sensor_audit.inventory.entity_manager import load_declaration
 from bmc_sensor_audit.inventory.redfish import RedfishClient, walk_chassis, walk_from_dict
+from presence_audit.vocabulary import spelled_kind  # noqa: E402
 from presence_audit.regression import compare_walks
 from presence_audit.report import regression_as_json, regression_as_text
 from bmc_sensor_audit.testing.mock_redfish import MockBMC, serve
@@ -34,9 +35,14 @@ def _walk(bmc: MockBMC):
 
 
 def _kinds(report) -> dict[str, list[str]]:
+    """Each change, under its kind SPELLED in this package's noun -- what the
+    report prints. The core emits `sensor_removed` through its 0.1 line and
+    `point_removed` from 0.2.0; this vertical's word for both is the first."""
+    from presence_audit.vocabulary import spelled_kind
+
     out: dict[str, list[str]] = {}
     for change in report.changes:
-        out.setdefault(change.kind, []).append(change.sensor)
+        out.setdefault(spelled_kind(change.kind), []).append(change.point)
     return out
 
 
@@ -111,7 +117,7 @@ class TestWhatTheGateFinds:
         bmc.add("Fan 0", reading=4200.0, units="RPM",
                 upper_critical=9000.0, lower_critical=1000.0)
         report = compare_walks(before, _walk(bmc))
-        renamed = [c for c in report.changes if c.kind == "sensor_renamed"]
+        renamed = [c for c in report.changes if spelled_kind(c.kind) == "sensor_renamed"]
         assert len(renamed) == 1
         assert "'FAN0'" in renamed[0].detail and "'Fan 0'" in renamed[0].detail
 
@@ -151,8 +157,8 @@ class TestWhatTheGateFinds:
             bmc.add(sensor.name, reading=sensor.reading, units=sensor.units or "Cel")
         bmc.add("NEW_TEMP", reading=20.0)
         report = compare_walks(before, _walk(bmc))
-        added = [c for c in report.changes if c.kind == "sensor_added"]
-        assert [c.sensor for c in added] == ["NEW_TEMP"]
+        added = [c for c in report.changes if spelled_kind(c.kind) == "sensor_added"]
+        assert [c.point for c in added] == ["NEW_TEMP"]
         assert not any(c.is_regression for c in added)
 
     def test_a_clean_reflash_reports_nothing(self, before):
@@ -217,7 +223,7 @@ class TestWhatItRefusesToGuess:
 
         report = compare_walks(before, broken)
         assert report.absence_withheld
-        assert not any(c.kind in ("sensor_removed", "sensor_added")
+        assert not any(spelled_kind(c.kind) in ("sensor_removed", "sensor_added")
                        for c in report.changes)
         assert "walk_incomplete" in _kinds(report)
 
@@ -255,7 +261,7 @@ class TestWhatItRefusesToGuess:
         report = compare_walks(before, _walk(bmc))
         assert report.fields_comparable
         drift = [c for c in report.changes if c.kind == "field_drift"]
-        assert [c.sensor for c in drift] == ["INLET_TEMP"]
+        assert [c.point for c in drift] == ["INLET_TEMP"]
         assert not drift[0].is_regression, (
             "a vendor extension is permitted by the standard; a gate that failed "
             "on the first one gets switched off, taking the signal with it")
@@ -297,7 +303,18 @@ class TestTheVocabularyStaysWhole:
         for path in roots:
             kinds |= set(re.findall(r'Change\(\s*"([a-z_]+)"', path.read_text()))
         assert kinds, "no change kinds found in any source; the pattern moved"
-        return kinds
+        return TestTheVocabularyStaysWhole._neutral(kinds)
+
+    @staticmethod
+    def _neutral(kinds) -> set[str]:
+        """Kinds in the core's own word, so the three lists compare on one
+        spelling. Through its 0.1 line the core emits and ranks the published
+        `sensor_removed` and reads `point_removed` as the same kind; from 0.2.0
+        it knows only the second, and has no table to translate with."""
+        from presence_audit import regression
+
+        neutral = getattr(regression, "neutral_kind", lambda kind: kind)
+        return {neutral(kind) for kind in kinds}
 
     def test_every_kind_is_ranked_and_has_a_headline(self):
         # `change_headlines()` was the module constant `_CHANGE_HEADLINE` until
@@ -309,20 +326,20 @@ class TestTheVocabularyStaysWhole:
         from presence_audit.report import CHANGE_ORDER, change_headlines
 
         emitted = self._emitted()
-        assert emitted - set(CHANGE_ORDER) == set(), "unranked kinds sort last silently"
-        assert emitted - set(change_headlines()) == set(), "kinds with no headline"
+        assert emitted - self._neutral(CHANGE_ORDER) == set(), "unranked kinds sort last silently"
+        assert emitted - self._neutral(change_headlines()) == set(), "kinds with no headline"
 
     def test_nothing_is_ranked_that_cannot_be_emitted(self):
         """The other direction. A stale entry is not dangerous, but it is a claim
         that the report can produce something it cannot."""
         from presence_audit.report import CHANGE_ORDER
 
-        assert set(CHANGE_ORDER) - self._emitted() == set()
+        assert self._neutral(CHANGE_ORDER) - self._emitted() == set()
 
     def test_every_regression_kind_is_one_the_module_emits(self):
         from presence_audit.regression import REGRESSION_KINDS
 
-        assert set(REGRESSION_KINDS) - self._emitted() == set(), (
+        assert self._neutral(REGRESSION_KINDS) - self._emitted() == set(), (
             "a kind listed as a regression that nothing produces cannot fail a "
             "gate, and reads as coverage that is not there")
 

@@ -21,10 +21,20 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.6**, tagged `v0.3.6`, Apache-2.0, on PyPI as
+**Released — 0.3.7**, tagged `v0.3.7`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.7 speaks the core's `point` and names what could explain a finding.**
+`presence-audit` 0.1.13 named its subject `point`, and this package now writes and
+reads that name, while its reports keep every key and kind they carried: they
+are written as format 2, keyed on `point` and on `sensor`. `adopt` writes through
+the core's own writer, and every basis it leaves is byte for byte what it wrote
+before. The Mt. Jade example gains a fault channel — the zone's fan can fail into
+its ambient reading, the reverse of the coupling — and `detect` prints the
+engine's ranking of declared causes beside a finding. It needs `presence-audit`
+0.1.13 and, for `detect`, `arbiter-engine` 0.2.13.
 
 **0.3.6 keeps a resident run's walks, so a board run can end in an adopted
 gain.** `adopt` fits from walks, and a resident run kept its readings only in
@@ -209,7 +219,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **874** collected with PyYAML installed, **845** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **896** collected with PyYAML installed, **867** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -740,10 +750,15 @@ established from a configuration file. Its two flows come from the platform's
 [`tests/fixtures/fan-control/ampere-mtjade/`](tests/fixtures/fan-control/ampere-mtjade):
 the firmware maps that ambient temperature to the zone's fan target. That is a
 control law, not airflow physics, and the gain is withheld because the map is in
-PWM counts and the reading is RPM. A test reads every clause of its basis back out
-of the vendored files. The other is a **template**, and its placeholder names match
-nothing on purpose: a run against it unedited stops and names every line still to
-be filled in, rather than checking nothing and reporting agreement.
+PWM counts and the reading is RPM. Its one **fault channel** runs the other way,
+on the same zone assignment: a stopped `FAN3_1` is one way `TS4_Temp` can move.
+It states no strength — the vendor files that reading as the zone's ambient one,
+and how far a fan moves it is physics no file here states — so the engine names
+the fan as a cause and ranks nothing, which is the true answer. A test reads
+every clause of both bases back out of the vendored files. The other is a
+**template**, and its placeholder names match nothing on purpose: a run against
+it unedited stops and names every line still to be filled in, rather than
+checking nothing and reporting agreement.
 
 **A number the file leaves out is one the engine chooses.** A redundant group with
 no `tolerance` and a flow with no `loss_margin` are still judged — against the

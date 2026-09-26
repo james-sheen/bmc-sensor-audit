@@ -275,7 +275,7 @@ class TestAbsenceFromAnAlternateSourceIsARegression:
 
     def test_a_pdr_sensor_that_is_absent_is_a_regression(self, tmp_path):
         report = self._report(tmp_path, "INLET_TEMP", "SHARED_TEMP", "GPU0_TEMP")
-        absent = [f.sensor for f in report.regressions if f.kind == "declared_absent"]
+        absent = [f.point for f in report.regressions if f.kind == "declared_absent"]
         assert "GPU1_TEMP" in absent
 
     def test_it_is_not_filed_as_an_unrecognised_type(self, tmp_path):

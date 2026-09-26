@@ -1,9 +1,9 @@
 {
- "format": "presence-audit/supplemental/2",
+ "format": "presence-audit/supplemental/4",
  "provenance": "TEMPLATE -- states nothing about any board. Copy it, replace every REPLACE_ME name with a sensor name your configuration actually declares, and replace every basis with what establishes the claim on YOUR hardware. Then put your own sentence here saying who established these and how. sampling_interval_s is the cadence YOUR collector walks at, in seconds, and it is not decoration: a coupling's propagation_delay_s has to be a whole number of those steps or the two series cannot be aligned at all. The names below are placeholders on purpose: they match no declaration, so a run against this file unedited stops and names them rather than checking nothing and passing.",
  "redundant_groups": [
   {
-   "sensors": [
+   "points": [
     "REPLACE_ME_FAN_A_TACH",
     "REPLACE_ME_FAN_B_TACH"
    ],
@@ -13,7 +13,7 @@
  ],
  "counters": [
   {
-   "sensor": "REPLACE_ME_POWER_ON_HOURS",
+   "point": "REPLACE_ME_POWER_ON_HOURS",
    "direction": "increasing",
    "allow_reset": true,
    "basis": "REPLACE_ME -- what makes this reading cumulative rather than instantaneous. allow_reset says whether the counter returns to zero on a power cycle or a firmware update; if it does and this says otherwise, every reset is reported as the counter going backwards."
@@ -39,6 +39,22 @@
    "response_model": "exponential",
    "gain": "estimate",
    "basis": "REPLACE_ME -- what makes the first reading DRIVE the second. An airflow or thermal design document showing that this fan moves the air this thermistor sits downstream of is the shape of answer that belongs here. What does NOT belong: that the two readings correlate. Correlation is what the engine FITS once you have declared the coupling, so offering it as the basis is circular -- and on a board where one controller drives the fan FROM that temperature, the correlation is real and the causal direction is the reverse of what you wrote. What also does not belong: that both sit on the same board, or that the names look related. DIRECTION IS PART OF THE CLAIM: an inlet thermistor reads the air arriving at the chassis and a fan does not change the room, so fan-to-inlet is the pairing that looks obvious and is usually backwards. Prefer a reading downstream of the airflow. gain is left as `estimate` on purpose: it withholds the coefficient and lets the engine fit one from history, report it with its n, its r_squared and an interval, and project NOTHING until a person writes a number down. Replace it with a number only if you have a thermal coefficient, and then add gain_basis saying where that number came from. propagation_delay_s and time_constant_s are how long the change takes to arrive and how fast it settles once it does; the delay must be a multiple of sampling_interval_s above."
+  }
+ ],
+ "fault_channels": [
+  {
+   "from": "REPLACE_ME_FAN_A_TACH",
+   "to": "REPLACE_ME_OUTLET_TEMP",
+   "basis": "REPLACE_ME -- what makes a failure of the first a way the second can go wrong. This is the direction a FAULT travels, which is often the reverse of a coupling: a controller sets a fan FROM a temperature, and a fan that stops is one reason that temperature rises. A zone assignment in the firmware's own fan-control files, or a thermal design showing the fan cools the part the sensor sits on, is the shape of answer that belongs here. What does NOT belong: that the two readings moved together once. weight is left out on purpose: it is how likely the failure is to show up this way, and without a number somebody measured the engine refuses to rank along the edge -- cpt_missing -- which is the honest answer. Add weight only with a weight_basis saying where the number came from."
+  }
+ ],
+ "actions": [
+  {
+   "name": "REPLACE_ME_SET_FAN_A",
+   "point": "REPLACE_ME_FAN_A_TACH",
+   "effect": "set",
+   "settle_s": 0,
+   "basis": "REPLACE_ME -- how an operator actually sets this, and that it takes. The firmware's manual-mode override, the IPMI or Redfish call that writes it, and the evidence it holds is the shape of answer that belongs here. What does NOT belong: that the reading looks settable. An action the machine does not accept is a plan nobody can carry out, and a recorded execution of one is a false record. effect is what the value you pass does to the reading -- set, add or scale -- and settle_s is how long it takes to arrive, zero for a step."
   }
  ]
 }

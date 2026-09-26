@@ -45,9 +45,9 @@ class TestNothingVanishes:
         exactly one side of the ledger — no silent drops, no double counting."""
         declaration, _, manifest = built
         excluded = sum(len(names) for names in manifest.excluded.values())
-        assert len(manifest.sensors) + excluded == len(declaration.sensors), (
+        assert len(manifest.points) + excluded == len(declaration.sensors), (
             f"{len(declaration.sensors)} declared, "
-            f"{len(manifest.sensors)} generated + {excluded} excluded")
+            f"{len(manifest.points)} generated + {excluded} excluded")
 
     def test_every_exclusion_states_a_reason(self, built):
         _, _, manifest = built
@@ -105,7 +105,7 @@ class TestTheModelIsWellFormed:
     def test_one_entity_type_per_generated_sensor(self, built):
         _, model, manifest = built
         types = model["domain"]["entity_types"]
-        assert len(types) == len(manifest.sensors)
+        assert len(types) == len(manifest.points)
         assert len(set(types)) == len(types), "entity type names collided"
 
     def test_every_type_has_at_least_one_indicator(self, built):
@@ -162,7 +162,7 @@ class TestFourBoundFidelity:
 
     def test_a_declared_floor_reaches_the_model_as_a_floor(self, built):
         _, model, manifest = built
-        with_lower = [s for s in manifest.sensors if s.has_lower]
+        with_lower = [s for s in manifest.points if s.has_lower]
         assert with_lower
         for sensor in with_lower:
             indicators = model["domain"]["indicators"][sensor.entity_type]
@@ -178,7 +178,7 @@ class TestFourBoundFidelity:
         leftover negation would read as a floor of -500 for a fan declared at 500,
         which no reading can ever fall below."""
         _, model, manifest = built
-        sensor = next(s for s in manifest.sensors
+        sensor = next(s for s in manifest.points
                       if s.lower[1] is not None and s.lower[0] is not None)
         indicator = model["domain"]["indicators"][sensor.entity_type][0]
         assert indicator["lower_warning"] == sensor.lower[0]
@@ -189,7 +189,7 @@ class TestFourBoundFidelity:
         once as `missing_config` rather than firing forever, so a generator that
         emitted one would silently stop checking that sensor."""
         _, model, manifest = built
-        for sensor in manifest.sensors:
+        for sensor in manifest.points:
             i = model["domain"]["indicators"][sensor.entity_type][0]
             if "lower_critical" in i and "critical" in i:
                 assert i["lower_critical"] < i["critical"], (
@@ -210,7 +210,7 @@ class TestFourBoundFidelity:
         engine has two slots. Folding one into `critical` would move the alarm point
         to a different number and call it the same thing."""
         _, _, manifest = built
-        unmapped = [u for s in manifest.sensors for u in s.unmapped_levels]
+        unmapped = [u for s in manifest.points for u in s.unmapped_levels]
         assert unmapped, "the corpus carries extra levels; none were recorded"
         for bound, level, value in unmapped:
             assert level not in ("warning", "critical")
@@ -226,7 +226,7 @@ class TestTranslationBackToTheSensor:
         "below_critical_threshold", "below_warning_threshold"])
     def test_every_floor_side_comparison_reads_as_below(self, built, problem_type):
         _, _, manifest = built
-        sensor = next(s for s in manifest.sensors if s.lower[1] is not None)
+        sensor = next(s for s in manifest.points if s.lower[1] is not None)
         finding = {"entity_id": sensor.entity_type, "severity": "critical",
                    "problem_type": f"{problem_type}:{READING}",
                    "reason": f"{READING} is below critical threshold"}
@@ -238,7 +238,7 @@ class TestTranslationBackToTheSensor:
         "threshold_exceeded", "threshold_warning"])
     def test_every_ceiling_side_comparison_reads_as_above(self, built, problem_type):
         _, _, manifest = built
-        sensor = next(s for s in manifest.sensors if s.upper[1] is not None)
+        sensor = next(s for s in manifest.points if s.upper[1] is not None)
         finding = {"entity_id": sensor.entity_type, "severity": "critical",
                    "problem_type": f"{problem_type}:{READING}",
                    "reason": f"{READING} exceeds critical threshold"}
@@ -264,7 +264,7 @@ class TestTranslationBackToTheSensor:
         package it reads is resolved by range.
         """
         _, _, manifest = built
-        sensor = next(s for s in manifest.sensors
+        sensor = next(s for s in manifest.points
                       if s.lower[1] is not None and s.upper[1] is not None)
         finding = {"entity_id": sensor.entity_type, "severity": "high",
                    "problem_type": f"{problem_type}:{READING}",
@@ -297,7 +297,7 @@ class TestTranslationBackToTheSensor:
         """The other half. Guessing between `above` and `BELOW` on an unrecognised
         shape is the confident misclassification this project keeps finding."""
         _, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         finding = {"entity_id": sensor.entity_type, "severity": "warning",
                    "problem_type": f"some_future_arm:{READING}",
                    "reason": f"{READING} did something new"}
@@ -311,7 +311,7 @@ class TestTranslationBackToTheSensor:
         sitting at 3.35 whose series had simply stopped moving -- a real number under
         the wrong name, which is worse than no number."""
         _, _, manifest = built
-        sensor = manifest.sensors[0]
+        sensor = manifest.points[0]
         finding = {"entity_id": sensor.entity_type, "severity": "high",
                    "problem_type": "frozen_series:reading", "axiom": "STABILITY",
                    "reason": "reading has not changed across 14 of 30 observations"}
@@ -325,7 +325,7 @@ class TestTranslationBackToTheSensor:
         `warning` and `critical`. Mapping an unknown one onto the nearest slot names a
         threshold the finding is not about."""
         _, _, manifest = built
-        sensor = next(s for s in manifest.sensors if s.upper[1] is not None)
+        sensor = next(s for s in manifest.points if s.upper[1] is not None)
         finding = {"entity_id": sensor.entity_type, "severity": "high",
                    "problem_type": f"threshold_exceeded:{READING}", "reason": "x"}
         translated = manifest.translate_finding(finding)

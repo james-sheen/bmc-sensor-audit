@@ -213,14 +213,17 @@ class TestTheFormatIsRaisedOnlyAsFarAsItMustBe:
         assert _adopt.format_for_spread(PREVIOUS) == CARRYING
         assert _adopt.format_for_spread(CARRYING) is None
 
-    def test_a_core_that_carries_none_is_refused_by_name(self, monkeypatch):
+    def test_no_core_the_floor_admits_drops_the_spread(self):
         """A core older than format 3 would write the gain, drop the spread,
-        and report success. Refused, naming the release that carries it."""
+        and report success, and this module used to refuse one by name. The
+        floor now names the core that took the writer over, so no core this
+        package installs beside is one of those -- asked of the installed
+        core rather than simulated, because the floor makes the old case
+        impossible to install."""
         from presence_audit import supplemental
 
-        monkeypatch.delattr(supplemental, "COUPLING_KEYS_BY_FORMAT")
-        with pytest.raises(_adopt.AdoptionRefused, match="0.1.11"):
-            _adopt.format_for_spread(PREVIOUS)
+        assert any(_adopt.SPREAD_KEY in keys
+                   for keys in supplemental.COUPLING_KEYS_BY_FORMAT.values())
 
     def test_the_raised_file_loads_through_the_format_that_owns_it(self, adopted):
         from presence_audit.supplemental import load_supplemental

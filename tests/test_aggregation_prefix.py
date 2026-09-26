@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from bmc_sensor_audit.inventory.redfish import (  # noqa: E402
     WALK_FORMAT, RedfishClient, walk_chassis, walk_from_dict)
+from presence_audit.vocabulary import spelled_kind  # noqa: E402
 from presence_audit.regression import (  # noqa: E402
     REGRESSION_KINDS, _apply_prefix, compare_walks, parse_prefix_map)
 from bmc_sensor_audit.testing.mock_redfish import MockBMC, serve  # noqa: E402
@@ -80,9 +81,14 @@ def _walk(prefix: str, *, rename_one: bool = False, drop: str = "",
 
 
 def _kinds(report) -> dict[str, list[str]]:
+    """Each change, under its kind SPELLED in this package's noun -- what the
+    report prints. The core emits `sensor_removed` through its 0.1 line and
+    `point_removed` from 0.2.0; this vertical's word for both is the first."""
+    from presence_audit.vocabulary import spelled_kind
+
     out: dict[str, list[str]] = {}
     for change in report.changes:
-        out.setdefault(change.kind, []).append(change.sensor)
+        out.setdefault(spelled_kind(change.kind), []).append(change.point)
     return out
 
 
@@ -268,7 +274,7 @@ class TestTheMapIsParsedStrictly:
         with the most reach of any."""
         report = compare_walks(_walk(""), _walk("HMC_0_", drop="TEMP1"),
                                prefix_map=[("", "HMC_0_")])
-        removed = [c for c in report.changes if c.kind == "sensor_removed"]
+        removed = [c for c in report.changes if spelled_kind(c.kind) == "sensor_removed"]
         assert len(removed) == 1, [c.kind for c in report.changes]
 
     def test_a_specific_prefix_still_beats_the_catch_all(self):

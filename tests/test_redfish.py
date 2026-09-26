@@ -121,7 +121,7 @@ def test_disabling_one_sensor_produces_exactly_one_finding():
     assert len(report.findings) == 1
     finding = report.findings[0]
     assert finding.kind == "declared_disabled"
-    assert finding.sensor == "CMOS Battery"
+    assert finding.point == "CMOS Battery"
     assert report.exit_code == 1
 
 
@@ -129,7 +129,7 @@ def test_removing_one_sensor_produces_exactly_one_finding():
     bmc = _populated("sensors")
     bmc.remove("CMOS Battery")
     report = compare(DECLARATION, _walk(bmc))
-    assert [(f.kind, f.sensor) for f in report.findings] == [
+    assert [(f.kind, f.point) for f in report.findings] == [
         ("declared_absent", "CMOS Battery")]
 
 
@@ -212,7 +212,7 @@ def test_the_firmware_upgrade_gate_end_to_end(tmp_path):
 
     assert compare(DECLARATION, before).exit_code == 0
     report = compare(DECLARATION, after)
-    assert {(f.kind, f.sensor) for f in report.findings} == {
+    assert {(f.kind, f.point) for f in report.findings} == {
         ("declared_absent", "CMOS Battery"),
         ("declared_disabled", "Fan 1 Tach")}
     assert report.exit_code == 1

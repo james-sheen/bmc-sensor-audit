@@ -517,9 +517,12 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
 
     report = compare(declaration, walk,
                      include_disabled_in_config=args.include_disabled)
+    # FORMAT 2, keyed on the core's `point` and on this package's own `sensor`,
+    # with every change kind spelled in this noun: the keys and kinds this report
+    # always carried, whichever core in the range is installed.
     rendered = (as_json(report, target=target,
-                        walk=walk if args.strict_fields else None) if args.json
-                else as_text(report, target=target))
+                        walk=walk if args.strict_fields else None, spelled=True)
+                if args.json else as_text(report, target=target))
     print(rendered)
 
     if args.strict_fields and not args.json:
@@ -652,7 +655,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     if args.model_out:
         Path(args.model_out).write_text(yaml.safe_dump(model))
     if args.manifest_out:
-        Path(args.manifest_out).write_text(json.dumps(manifest.to_dict(), indent=2))
+        Path(args.manifest_out).write_text(_manifest_as_json(manifest))
 
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
         handle.write(yaml.safe_dump(model))
@@ -711,7 +714,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         # pattern-matching a judgement only they can make.
         artifact = build_attestation(session, envelope, described, manifest,
                                      target=args.attest_target_label or target,
-                                     attest_fn=attest)
+                                     attest_fn=attest, spelled=True)
         Path(args.attest_out).write_text(json.dumps(artifact, indent=2))
 
         # Said on the terminal, not only inside the file. The artifact already
@@ -729,6 +732,9 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         if notice:
             print(f"\n{notice}", file=sys.stderr)
     print(detect_as_text(outcome, feed_result))
+    ranking = _rankings_as_text(session, envelope, manifest)
+    if ranking:
+        print(ranking)
 
     if ledger is not None:
         if args.walk:
@@ -832,6 +838,74 @@ class _StoresUnavailable(RuntimeError):
 #: Surfaced by name, because a run that files forecasts for the driver and none
 #: for the coupling reads as a coupling that is being graded when it is not.
 _COUPLING_FILING_REFUSALS = ("gain_not_adopted", "no_declared_tolerance")
+
+
+def _rankings_as_text(session: Any, envelope: dict, manifest: Any) -> str:
+    """What could explain each sensor with a finding, asked of the engine.
+
+    One line per sensor a declared cause reaches: the causes the engine ranked,
+    with their posteriors, or the name it declined under -- `cpt_missing` where
+    a fault channel is declared with no strength, which is the true answer
+    until somebody measures one. Sensors no declared cause reaches are counted
+    under the reason the engine gave, one line per reason. Nothing is printed
+    for a run with no finding, so a clean report reads exactly as it did.
+    Sensors are named as the operator's file names them; the engine's ids are
+    the generated types.
+    """
+    subjects: list[str] = []
+    for finding in envelope.get("findings") or []:
+        entity = finding.get("entity_id")
+        if entity and entity not in subjects:
+            subjects.append(entity)
+    if not subjects:
+        return ""
+    from arbiter_engine.api import hypothesize
+
+    names = {point.entity_type: point.declared_name for point in manifest.points}
+    lines = ["", "What could explain it (the engine's ranking of declared causes):"]
+    # Sensors no declared cause reaches share one line per reason: a board with
+    # no fault channel would otherwise print the same refusal once per finding.
+    unexplained: dict[str, list[str]] = {}
+    for entity in subjects:
+        leg = hypothesize(session, entity).to_dict().get("hypothesis") or {}
+        declined = sorted({str(d.get("reason")) for d in leg.get("not_checked") or []
+                           if d.get("reason")})
+        causes = leg.get("candidates") or []
+        if not causes:
+            why = ", ".join(declined) or "with no reason given"
+            unexplained.setdefault(why, []).append(names.get(entity, entity))
+            continue
+        ranked = []
+        for cause in causes[:3]:
+            name = names.get(cause.get("cause"), cause.get("cause"))
+            posterior = cause.get("posterior")
+            if isinstance(posterior, (int, float)):
+                ranked.append(f"{name} {posterior:.2f}")
+            else:
+                # A cause the engine named and could not score, with the reason
+                # it gave -- `cpt_missing` for a channel nobody gave a strength.
+                why = ", ".join(cause.get("declined") or ()) or "no reason given"
+                ranked.append(f"{name} (unranked: {why})")
+        lines.append(f"  {names.get(entity, entity)}: {'; '.join(ranked)}")
+    for why, sensors in unexplained.items():
+        shown = ", ".join(sensors[:3]) + (f" and {len(sensors) - 3} more"
+                                          if len(sensors) > 3 else "")
+        lines.append(f"  declined {why}: {len(sensors)} sensor(s) -- {shown}")
+    return "\n".join(lines)
+
+
+def _manifest_as_json(manifest: Any) -> str:
+    """The generated manifest, with this package's own key for its list kept.
+
+    The core serialises the list as `points`, beside the `sensors` it published
+    first through its 0.1 line and alone from its 0.2.0. A reader of this
+    command's manifest has read `sensors`, and in this package's word that is
+    what the list is, so it stays -- with the same list under both keys.
+    """
+    document = manifest.to_dict()
+    if "sensors" not in document and "points" in document:
+        document["sensors"] = document["points"]
+    return json.dumps(document, indent=2)
 
 
 def _file_forecasts(session: Any, manifest: Any, horizon_s: float,
@@ -982,6 +1056,9 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
                     if cycle == 1:
                         print(as_text(report, target=args.target))
                         print(detect_as_text(outcome, feed_result))
+                        ranking = _rankings_as_text(session, envelope, manifest)
+                        if ranking:
+                            print(ranking)
                     issued, rolled, withheld = _file_forecasts(
                         session, manifest, horizon, cadence)
                     if withheld and withheld != said_withheld:
@@ -1257,7 +1334,8 @@ def _cmd_regression(args: argparse.Namespace) -> int:
         return EXIT_INCOMPLETE
 
     report = compare_walks(before, after, prefix_map=prefix_map)
-    print(regression_as_json(report, before=args.before, after=args.after) if args.json
+    print(regression_as_json(report, before=args.before, after=args.after,
+                             spelled=True) if args.json
           else regression_as_text(report, before=args.before, after=args.after))
 
     if args.strict_fields and not args.json:

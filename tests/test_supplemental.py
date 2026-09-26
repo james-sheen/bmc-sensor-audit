@@ -258,7 +258,7 @@ class TestTheGeneratedModelCarriesTheDeclaration:
 
     def test_the_manifest_records_the_pairing_and_its_source(self, built):
         model, manifest = built
-        sensor = next(s for s in manifest.sensors
+        sensor = next(s for s in manifest.points
                       if s.declared_name == "MB_U73_THERM_LOCAL")
         assert sensor.agrees_with == ("MB_U73_THERM_REMOTE",)
         assert manifest.counts()["redundant_groups"] == 1

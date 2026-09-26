@@ -317,7 +317,7 @@ class TestTheGeneratedModelIsAcceptedWhole:
         """
         from presence_audit.generator import READING
         _, manifest, session = generated
-        sensor = next(s for s in manifest.sensors if s.lower[1] is not None)
+        sensor = next(s for s in manifest.points if s.lower[1] is not None)
         below = sensor.lower[1] - 0.1
         session.add_entity(sensor.entity_type, sensor.entity_type,
                            properties={READING: below})
@@ -374,7 +374,7 @@ class TestTheWholeStage2PathEndToEnd:
         return manifest, result, outcome
 
     def _pick(self, manifest):
-        return next(s for s in manifest.sensors if s.has_lower and s.upper[0] is not None)
+        return next(s for s in manifest.points if s.has_lower and s.upper[0] is not None)
 
     def test_a_healthy_reading_passes_and_says_liveness_is_warming_up(self):
         """One walk is one sample. The gate passes, and the report can say so rather
@@ -1233,7 +1233,7 @@ class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
         started = time.perf_counter()
         session = EngineSession()
         session.load_model(str(path))
-        for sensor in manifest.sensors:
+        for sensor in manifest.points:
             session.add_entity(sensor.entity_type, sensor.entity_type,
                                properties={"reading": 25.0})
             session.add_observations(sensor.entity_type, "reading",
@@ -1255,11 +1255,11 @@ class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
         engine is asked to do by more than a factor of two, and `check()` cost is
         driven by what was fed."""
         _, declaration, manifest, envelope = run_over_the_corpus
-        assert envelope["checked"]["entities"] == len(manifest.sensors)
-        assert len(manifest.sensors) < len(declaration.sensors), (
+        assert envelope["checked"]["entities"] == len(manifest.points)
+        assert len(manifest.points) < len(declaration.sensors), (
             "every declaration is now modelled; the exclusion ledger has stopped "
             "excluding, which is a bigger change than a timing one")
-        assert envelope["checked"]["invariants"] == 2 * len(manifest.sensors), (
+        assert envelope["checked"]["invariants"] == 2 * len(manifest.points), (
             "two axioms per modelled sensor is the shape the measurement assumed")
 
     def test_nothing_was_dropped_between_the_declaration_and_the_ledger(
@@ -1268,8 +1268,8 @@ class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
         honest if the difference is accounted for rather than lost."""
         _, declaration, manifest, _ = run_over_the_corpus
         excluded = sum(len(names) for names in manifest.excluded.values())
-        assert len(manifest.sensors) + excluded == len(declaration.sensors), (
-            f"{len(declaration.sensors)} declared, {len(manifest.sensors)} modelled, "
+        assert len(manifest.points) + excluded == len(declaration.sensors), (
+            f"{len(declaration.sensors)} declared, {len(manifest.points)} modelled, "
             f"{excluded} excluded -- these do not add up, so something was dropped "
             f"without a reason being recorded")
 
@@ -1298,8 +1298,18 @@ class TestThePreReleaseDoorIsNamedWhereItIsNeeded:
         assert message is not None, "a pre-release was admitted without being named"
         assert "BSA_VERIFY_ENGINE_PRERELEASE=0.2.9.dev0" in message, message
 
+    @staticmethod
+    def _inside_the_pin() -> str:
+        """A pre-release whose release part is the pin's own floor. This was a
+        literal once, which is a copy of the pin, and it fell outside the range
+        the day the floor rose past it."""
+        pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
+        floor = re.search(r'"arbiter-engine>=([0-9.]+),<', pyproject.read_text()).group(1)
+        return f"{floor}.dev0"
+
     def test_naming_it_opens_the_door(self, monkeypatch):
-        assert self._refusal(monkeypatch, "0.2.9.dev0", named="0.2.9.dev0") is None
+        inside = self._inside_the_pin()
+        assert self._refusal(monkeypatch, inside, named=inside) is None
 
     def test_a_stale_name_says_it_is_stale(self, monkeypatch):
         """The opt-in expires by itself; the refusal says that is what happened

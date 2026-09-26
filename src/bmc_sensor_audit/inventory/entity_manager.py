@@ -212,6 +212,15 @@ class Anomaly:
     detail: str
     sensor: str | None = None
 
+    @property
+    def point(self) -> str | None:
+        """The sensor, under the name the core reads a vertical's record by.
+
+        This record is this package's and keeps its own word; the core asks
+        for `point`, and from its 0.2.0 asks for nothing else.
+        """
+        return self.sensor
+
     def __str__(self) -> str:
         where = f"{self.source}: {self.sensor}" if self.sensor else self.source
         return f"[{self.kind}] {where} -- {self.detail}"
