@@ -161,6 +161,69 @@ jobs:
           python3 -m pip install --quiet pyyaml pytest $(python3 tools/runtime_deps.py)
           python3 -m pytest tests/ -q
 
+      - name: The same suite, from the sdist this tree builds
+        # THE ARTIFACT, NOT THE CHECKOUT. A packager or a reviewer runs the suite
+        # from the sdist, and on 2026-09-26 five of the nine sdists in this family
+        # could not: each carried tests/ without files those tests import or open,
+        # so collection stopped and nothing ran, while twine, the metadata and a
+        # clean wheel install all passed over it. So the suite runs again from the
+        # unpacked sdist and from `git archive HEAD`, neither with a `.git`, and
+        # every test must answer the same on both sides: a test that needs a
+        # repository skips on both, and a file the sdist leaves out cannot hide.
+        # Nothing is reinstalled: this job runs the suite with the package
+        # deliberately not installed, and so do both sides here.
+        env:
+          PRE: ""
+        run: |
+          set -euo pipefail
+          T="${RUNNER_TEMP:-/tmp}/sdist-check"
+          rm -rf "${T}" && mkdir -p "${T}/tree" "${T}/unpacked"
+          git archive HEAD | tar -x -C "${T}/tree"
+          python3 -m pip install --quiet build
+          python3 -m build --sdist --outdir "${T}/dist" . > "${T}/build.log"
+          tar -xzf "${T}"/dist/*.tar.gz -C "${T}/unpacked" --strip-components=1
+          test ! -e "${T}/unpacked/.git"
+          for side in tree unpacked; do
+            (cd "${T}/${side}" && { [ -z "${PRE}" ] || python3 ${PRE} > /dev/null; } \
+               && python3 -m pytest tests/ -q -p no:cacheprovider --junitxml="${T}/${side}.xml") \
+               > "${T}/${side}.log" 2>&1 || true
+          done
+          python3 - "${T}" <<'PY'
+          import pathlib, sys, xml.etree.ElementTree as ET
+          T = pathlib.Path(sys.argv[1])
+          def outcomes(side):
+              report = T / f"{side}.xml"
+              if not report.is_file():
+                  print((T / f"{side}.log").read_text()[-3000:])
+                  sys.exit(f"::error::the {side} run wrote no report")
+              out = {}
+              for case in ET.parse(report).getroot().iter("testcase"):
+                  kinds = {child.tag for child in case}
+                  out[f"{case.get('classname')}::{case.get('name')}"] = (
+                      "failed" if "failure" in kinds else "error" if "error" in kinds
+                      else "skipped" if "skipped" in kinds else "passed")
+              return out
+          tree, sdist = outcomes("tree"), outcomes("unpacked")
+          if not tree:
+              sys.exit("::error::the tracked tree collected nothing, so there is nothing to compare")
+          broken = sorted(k for k, v in sdist.items() if v in ("failed", "error"))
+          missing = sorted(set(tree) - set(sdist))
+          extra = sorted(set(sdist) - set(tree))
+          changed = sorted(k for k in set(tree) & set(sdist) if tree[k] != sdist[k])
+          for label, keys in (("fails when run from the sdist", broken),
+                              ("is in the tree and not in the sdist", missing),
+                              ("is in the sdist and not in the tree", extra),
+                              ("answers differently from the sdist", changed)):
+              for key in keys[:25]:
+                  print(f"::error::{key} {label} (tree: {tree.get(key)}, sdist: {sdist.get(key)})")
+          if broken or missing or extra or changed:
+              print((T / "unpacked.log").read_text()[-3000:])
+              sys.exit(1)
+          count = lambda outcome: sum(1 for v in sdist.values() if v == outcome)
+          print(f"  the sdist answers exactly as the tracked tree does: {len(sdist)} tests, "
+                f"{count('passed')} passed, {count('skipped')} skipped")
+          PY
+
       - name: The documented console-script path, from a clean checkout
         # The second path the README prints, which the suite can only check
         # structurally because it must not run pip. Here a clean runner is free,
