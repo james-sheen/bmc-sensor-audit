@@ -21,10 +21,17 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.5**, tagged `v0.3.5`, Apache-2.0, on PyPI as
+**Released — 0.3.6**, tagged `v0.3.6`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.6 keeps a resident run's walks, so a board run can end in an adopted
+gain.** `adopt` fits from walks, and a resident run kept its readings only in
+`--history`, so a day of grading a board left nothing to fit from.
+`--keep-walks DIR` writes each cycle's walk, named by its instant.
+`docs/burn-in.md` now sets out a board run end to end, written before any
+board has produced a figure: when each one can first exist, and what to record.
 
 **0.3.5 grades a coupling, and writes a fitted gain's spread beside it.** Each
 `detect` cycle now rolls the model forward from the driver's own forecast, so a
