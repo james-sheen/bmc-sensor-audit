@@ -107,12 +107,15 @@ runs:
         # asked; `tests/test_action.py` now fails when this range cannot install
         # the version this repository is currently building.
         #
-        # The floor is 0.2.2 and not 0.2.0, for a reason reachable from these
-        # inputs: before it, a BMC that answered with a certificate this run
-        # would not accept was reported as unreachable, which sends an operator
-        # to the network to look for a machine that is right there. `target`
-        # without `insecure` is the ordinary way to meet that, and `insecure`
-        # exists in this file because BMCs ship self-signed certificates.
+        # Then the same thing one level out. This range moved to 0.3 with the
+        # tool's 0.3.0 and `action-v0` did not, so consumers ran 0.2.7 through
+        # six 0.3 releases while that test read this file and passed. A consumer
+        # reads this file AT THE TAG, so the test now reads it there as well.
+        #
+        # The floor is 0.3.0: the line this repository builds, and the one the
+        # dogfood workflow runs this file against. 0.3.0 renamed the attestation
+        # format that `attest` writes -- a reader on 0.3 reads both names, and a
+        # reader held below it refuses the new one.
         case "$BSA_MODE" in
           detect)   spec='bmc-sensor-audit[detect]>=0.3.0,<0.4' ;;
           coverage) spec='bmc-sensor-audit>=0.3.0,<0.4' ;;

@@ -279,9 +279,10 @@ class TestTheActionCanInstallTheToolThisRepositoryBuilds:
         assert req.name == "bmc-sensor-audit", raw
         assert req.specifier.contains(__version__), (
             f"action.yml installs {raw!r}, which cannot resolve to "
-            f"{__version__} -- the version this repository builds. A consumer "
-            f"writing `uses: ...@action-v0` would get an older tool than the "
-            f"one released here, and would not be told")
+            f"{__version__} -- the version this repository builds. An action "
+            f"tag cut from this tree would install an older tool than the one "
+            f"released here. What consumers get NOW is the file at the moving "
+            f"tag, which the class below reads")
 
     def test_that_check_could_have_failed(self):
         """The assertion above is only worth having if the range it rejects is
@@ -307,3 +308,126 @@ class TestTheActionCanInstallTheToolThisRepositoryBuilds:
         assert coverage in README.read_text(), (
             f"action.yml installs {coverage!r}; the README's tag table names "
             f"something else, and a reader believes the README")
+
+
+MOVING = "action-v0"
+
+
+def _at_tag(tag: str, path: str) -> str | None:
+    """`path` as it stands at `tag`, or None when this checkout cannot say.
+
+    None covers three states that are all *cannot tell*: no git binary, no
+    repository, and a clone fetched without tags -- `actions/checkout`'s
+    default, which is why the checks job here fetches at depth 0.
+    """
+    try:
+        shown = subprocess.run(["git", "show", f"refs/tags/{tag}:{path}"],
+                               cwd=str(ROOT), capture_output=True, text=True)
+    except OSError:
+        return None
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def _tags(pattern: str) -> list[str] | None:
+    try:
+        listed = subprocess.run(["git", "tag", "--list", pattern],
+                                cwd=str(ROOT), capture_output=True, text=True)
+    except OSError:
+        return None
+    return listed.stdout.split() if listed.returncode == 0 else None
+
+
+def _commit(tag: str) -> str | None:
+    try:
+        resolved = subprocess.run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"],
+                                  cwd=str(ROOT), capture_output=True, text=True)
+    except OSError:
+        return None
+    return resolved.stdout.strip() if resolved.returncode == 0 else None
+
+
+def _install_specs(action_text: str) -> list[str]:
+    spec = yaml.safe_load(action_text)
+    script = next(s for s in spec["runs"]["steps"]
+                  if s.get("name") == "Install the pinned tool")["run"]
+    return re.findall(r"spec='([^']+)'", script)
+
+
+def _newest(pattern: str, shape: str) -> str | None:
+    """The newest tag matching `shape`, compared as a version, not as text."""
+    from packaging.version import Version
+
+    listed = _tags(pattern)
+    if not listed:
+        return None
+    fixed = [t for t in listed if re.fullmatch(shape, t)]
+    return max(fixed, key=lambda t: Version(t.split("v", 1)[1])) if fixed else None
+
+
+class TestTheMovingTagInstallsTheNewestRelease:
+    """What a consumer resolves, read where a consumer reads it.
+
+    The class above reads `action.yml` from the working tree, and a consumer
+    never does: `uses: ...@action-v0` fetches the file AT THE TAG. The range
+    widened to 0.3 with the split on 2026-09-08 and `action-v0` stayed where
+    `action-v0.1.1` had put it, so every consumer installed 0.2.7 through six
+    0.3 releases while the class above stayed green -- the defect
+    `action-v0.1.1` fixed, one level out.
+
+    So this reads the file at the moving tag and asks the consumer's question:
+    does it install the newest release this repository has TAGGED? The newest
+    tag, not the version literal -- between a version bump and its tag the
+    literal is ahead of every release, and a range that cannot install an
+    unreleased version is not wrong yet.
+    """
+
+    def _specs(self) -> list[str]:
+        text = _at_tag(MOVING, "action.yml")
+        if text is None:
+            pytest.skip(f"`{MOVING}` is not visible here; *cannot tell* is not "
+                        f"*stale*. CI fetches tags at depth 0, so it runs there")
+        return _install_specs(text)
+
+    def _newest_release(self) -> str:
+        newest = _newest("v*", r"v\d+\.\d+\.\d+")
+        if newest is None:
+            pytest.skip("no release tags visible here; *cannot tell* is not "
+                        "*no releases*")
+        return newest[1:]
+
+    def test_the_moving_tag_installs_the_newest_release(self):
+        newest = self._newest_release()
+        specs = self._specs()
+        assert len(specs) == 2, f"expected two specs at {MOVING}, found {specs!r}"
+        for raw in specs:
+            assert Requirement(raw).specifier.contains(newest), (
+                f"`uses: ...@{MOVING}` installs {raw!r}, which cannot resolve "
+                f"to {newest}, the newest release tagged here -- every consumer "
+                f"of the moving tag gets an older tool, and nothing tells them. "
+                f"Cut an action-v0.x.y whose range admits it and move {MOVING} "
+                f"to it with --force-with-lease")
+
+    def test_that_check_could_have_failed(self):
+        """The range the moving tag carried from 2026-09-08 until it moved."""
+        text = _at_tag("action-v0.1.1", "action.yml")
+        if text is None:
+            pytest.skip("`action-v0.1.1` is not visible here")
+        newest = self._newest_release()
+        assert not any(Requirement(raw).specifier.contains(newest)
+                       for raw in _install_specs(text)), (
+            f"the range this check exists to reject admits {newest}, so the "
+            f"assertion above cannot fail and proves nothing")
+
+    def test_the_moving_tag_is_the_newest_action_release(self):
+        """The README says it tracks the latest `action-v0.x.y`, so it has to
+        resolve to that tag's commit -- which is also what gives the version a
+        consumer gets a name and a release page."""
+        moving = _commit(MOVING)
+        newest = _newest("action-v0.*", r"action-v0\.\d+\.\d+")
+        if moving is None or newest is None:
+            pytest.skip("the action's tags are not visible here")
+        assert moving == _commit(newest), (
+            f"`{MOVING}` resolves to {moving[:7]}, and the newest fixed action "
+            f"tag, {newest}, to {_commit(newest)[:7]}. A consumer of the moving "
+            f"tag is running a version that is not the newest one, or one with "
+            f"no name")
