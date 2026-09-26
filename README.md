@@ -202,7 +202,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **870** collected with PyYAML installed, **841** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **874** collected with PyYAML installed, **845** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -841,6 +841,13 @@ never graded, adopted or not; the engine named a missing spread as the reason,
 and a spread filed nothing either. And **no real board has produced one of these
 figures**: every number here so far came from a bench whose readings were
 generated.
+
+**`--keep-walks DIR` keeps what a resident run walked**, one file per cycle named
+by its instant. `adopt` fits from walks, and a resident run otherwise kept its
+readings only in `--history`, so a day of grading a board left nothing to adopt a
+gain from. The kept walks are also the one record anyone else can re-derive the
+run's figures from. `docs/burn-in.md` sets out a board run end to end, with what
+to record and when each figure can first exist.
 
 **A per-run record.** `--attest-out` writes what was checked, what was **declined**,
 and the measurement behind every finding — the reading, the threshold it crossed and

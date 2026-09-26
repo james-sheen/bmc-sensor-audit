@@ -335,6 +335,10 @@ class TestACombinationThatWouldDoNothingIsRefused:
         assert cli.main(argv) == cli.EXIT_INCOMPLETE
         assert "invented times" in capsys.readouterr().err
 
+    def test_keeping_walks_without_resident_is_refused(self, bench):
+        assert cli.main(_argv(bench, "--keep-walks",
+                              str(bench["tmp"] / "kept"))) == cli.EXIT_INCOMPLETE
+
     def test_cadence_flags_without_resident_are_refused(self, bench):
         assert cli.main(_argv(bench, "--cycles", "3")) == cli.EXIT_INCOMPLETE
 
@@ -351,3 +355,48 @@ class TestTheOldGapStaysClosed:
         rows = sqlite3.connect(str(ledger)).execute(
             "select count(*) from predictions").fetchone()[0]
         assert rows > 0, "the ledger file holds no rows"
+
+
+class TestAResidentRunKeepsItsWalks:
+    """G1 of the 0.2.9 verification, one step on: the run on a real board has to
+    leave something `adopt` can fit from.
+
+    `adopt` takes WALKS. A resident run kept its readings only in `--history`,
+    which `adopt` does not read, so a day of grading a board left nothing to
+    adopt a gain from -- the burn-in and the adoption the plan puts after it
+    could not be chained without a second process walking the same BMC. The
+    walks are also the one record anybody else can re-derive the figures from.
+    """
+
+    CYCLES = 5
+
+    def _kept(self, bench):
+        _engine()
+        kept = bench["tmp"] / "kept"
+        cli.main(_argv(bench, "--resident", "--ledger", str(bench["tmp"] / "l.sqlite"),
+                       "--cycles", str(self.CYCLES), "--keep-walks", str(kept)))
+        return kept
+
+    def test_one_file_per_cycle_named_in_order(self, bench):
+        files = sorted(self._kept(bench).glob("walk-*.json"))
+        assert len(files) == self.CYCLES == bench["board"].walked
+        stamps = [f.stem.split("-", 1)[1] for f in files]
+        assert stamps == sorted(stamps) and len(set(stamps)) == self.CYCLES, (
+            "named by the cycle's instant, so a shell glob is chronological")
+
+    def test_each_is_the_walk_that_cycle_took(self, bench):
+        files = sorted(self._kept(bench).glob("walk-*.json"))
+        board = _Board(steps=self.CYCLES)
+        for i, path in enumerate(files):
+            kept = walk_from_dict(json.loads(path.read_text()))
+            assert kept.to_dict() == board.walk(None).to_dict(), path.name
+
+    def test_detect_reads_them_back(self, bench):
+        """They are walks in the format every other command reads, not a
+        private dump -- which is what lets `adopt --walk` take them."""
+        files = sorted(self._kept(bench).glob("walk-*.json"))
+        argv = ["detect", "--config", str(bench["config"]),
+                "--supplemental", str(_supplemental(bench["tmp"]))]
+        for path in files:
+            argv += ["--walk", str(path)]
+        assert cli.main(argv) in (cli.EXIT_CLEAN, cli.EXIT_REGRESSION)

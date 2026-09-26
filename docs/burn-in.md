@@ -141,3 +141,76 @@ this tool cannot tell those apart. And the honest limit stated everywhere else i
 this repository applies here too — **no real BMC has yet been watched going quiet
 by itself.** The stuck-at pathway is proven against firmware readings under
 ground truth somebody controlled, which is not the same claim.
+
+## Grading the engine's forecasts on a real board
+
+Everything above asks whether a board's sensors stayed alive. A resident run can
+ask a second question during the same burn-in: **how often did the engine's
+forecast of this board land inside its own stated band, and did it beat a random
+walk?** No physical board has answered it yet. This section is written before
+any has, so that nothing below can be tuned to fit a result.
+
+### What has to exist first
+
+- A board reachable over Redfish, its entity-manager configuration, and a
+  supplemental file declaring at least one coupling whose basis is the board's
+  own firmware configuration. `examples/supplemental/ampere-mtjade.json`
+  declares one for Ampere Mt. Jade -- `TS4_Temp` driving `FAN3_1`, from the
+  platform's phosphor-fan-control files. For another board, declare its
+  coupling the same way, from its own fan-control configuration;
+  `TEMPLATE.json` says what a basis has to carry.
+- `bmc-sensor-audit[detect]` at the release that ships `--keep-walks`, or later.
+
+### The run
+
+```
+bmc-sensor-audit detect --config <configs> --supplemental <board>.json \
+    --target https://<bmc> <credentials, as for capture> \
+    --resident --ledger burn-in.sqlite --history readings.sqlite \
+    --keep-walks walks/
+```
+
+Every cycle prints one line: the instant, the exit code, what was filed, and the
+ledger's own figures with their denominators -- `confirm_rate` against the rate
+the forecasts' own bands promised, and each model's CRPS beside the random walk's.
+
+### When each figure can first exist
+
+From the tool's defaults, not from a run. The cadence is the supplemental's
+`sampling_interval_s` -- 60 s in the Mt. Jade example -- and a forecast looks one
+cadence ahead.
+
+- **The driver's forecast.** Its projector fits on five readings, so the first
+  forecast is filed on the fifth cycle and graded one horizon plus the ledger's
+  60 s grace later: about seven minutes in, at 60 s.
+- **The coupling's own projections.** None until its gain is written down. The
+  gain is fitted from paired changes -- consecutive readings of the two sensors,
+  aligned -- and the engine will not fit one below 120, so the proposal appears
+  after about 121 walks: two hours at 60 s. `adopt --list`, given the same
+  `--config` and `--supplemental` and `--walk walks/*.json`, shows it; `adopt`
+  writes it; a second resident run over the updated supplemental grades what
+  the coupling predicts. Keep the default cadence: `adopt` places recorded
+  walks one declared `sampling_interval_s` apart, so a run walked at another
+  `--every` would be fitted on the wrong spacing.
+- **Nothing moves, nothing is fitted.** A driver that never changes across the
+  walks is refused `unidentifiable_parameter`. An ambient sensor on a thermally
+  settled bench may do exactly that; the burn-in's own load is what moves it.
+
+### What to record, and how
+
+Stop the run first -- the ledger is written between cycles -- then add one row
+below per board and date:
+
+- the last cycle line, copied verbatim;
+- `sha256sum burn-in.sqlite` and the digest of the walks (`sha256sum walks/*.json | sha256sum`);
+- the versions (`bmc-sensor-audit --version`, and the engine's from `pip show arbiter-engine`);
+- the board, as its own Redfish chassis model reports it, and the cadence.
+
+**A figure is quoted with its count and the random walk's figure beside it, or
+not at all.** The first graded cycle is a smoke test; the row is taken from the
+run as it stood when it was stopped. What a row claims is what the engine's
+forecasts did on that board over that span, and nothing about any other board.
+
+| Date | Board | Cycles | Last cycle line | `burn-in.sqlite` sha256 | Walks digest | Versions |
+|---|---|---|---|---|---|---|
+| *none yet* | | | | | | |

@@ -788,6 +788,9 @@ def _stores_refusal(args: argparse.Namespace) -> str | None:
     if not args.resident and (args.every is not None or args.cycles is not None):
         return ("--every and --cycles set a resident run's cadence and length, "
                 "and this run is not resident; pass --resident, or drop them")
+    if not args.resident and getattr(args, "keep_walks", None):
+        return ("--keep-walks keeps the walks a resident run takes, and this run "
+                "is not resident; one walk is written with `capture --out`")
     return None
 
 
@@ -937,6 +940,16 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
           f"forecasts {horizon:g}s ahead into {args.ledger}"
           + (f", for {args.cycles} cycle(s)" if args.cycles else
              ", until interrupted"), file=sys.stderr)
+    # THE RAW WALKS, KEPT. The ledger holds what was forecast and the history
+    # what was read, and neither is what `adopt` fits from: it takes walks. So
+    # without these a resident run could grade a board for a day and leave
+    # nothing to adopt a gain from -- and nothing anyone else could re-derive
+    # its figures from.
+    kept = None
+    if getattr(args, "keep_walks", None):
+        kept = Path(args.keep_walks)
+        kept.mkdir(parents=True, exist_ok=True)
+        print(f"resident: keeping each cycle's walk in {kept}", file=sys.stderr)
     client = _client(args)
     worst: int | None = None
     said_withheld: list[str] = []
@@ -947,6 +960,11 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
             at = _now()
             with as_of(at):
                 walk = walk_chassis(client)
+                if kept is not None:
+                    # BEFORE it is judged, so a cycle that fails to complete
+                    # still leaves the raw walk that explains why.
+                    (kept / f"walk-{at:%Y%m%dT%H%M%SZ}.json").write_text(
+                        json.dumps(walk.to_dict(), indent=2))
                 report = compare(declaration, walk,
                                  include_disabled_in_config=args.include_disabled)
                 if not report.walk_complete:
@@ -1506,6 +1524,12 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--horizon", type=float, metavar="SECONDS",
                         help="how far ahead each forecast is filed; defaults to "
                              "one collection step")
+    detect.add_argument("--keep-walks", metavar="DIR",
+                        help="write each --resident cycle's walk into DIR, one "
+                             "file per cycle named by its instant, so `adopt "
+                             "--walk` can fit from the readings this run graded "
+                             "and the figures can be re-derived from the raw "
+                             "walks. Resident runs only")
     detect.set_defaults(func=_cmd_detect)
 
     adopt = subparsers.add_parser(
