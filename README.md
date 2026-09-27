@@ -805,6 +805,18 @@ changes what a later audit asserts, and it should not be possible against a
 printout of a file that has since been edited — then writes `gain` and a
 `gain_basis` sentence carrying the support the decision rested on.
 
+**A sensor that missed a reading is fitted from its last miss on.** Walks are fed
+one collection slot apart, in order, and a slot cannot be left empty. So a
+missed reading put every earlier reading of that sensor one walk out of line
+with its partner. On `adopt`'s own test fixture, one miss at walk 191 of 200
+fitted -0.0021 against a true 0.004. With `presence-audit` 0.2.3, such a sensor is
+fed from the walk after its last miss, and `adopt --list` prints how many
+readings that left.
+
+A walk that was never taken still closes up, and walk times are not yet read.
+[`presence-audit`'s README](https://github.com/james-sheen/presence-audit#where-a-reading-lands-in-time)
+says what that waits for.
+
 **It writes the spread beside it.** The engine proposes a `gain_sigma` with every
 fitted gain, the standard error of the fit, and `adopt` writes it with a
 `gain_sigma_basis` of its own saying what that number assumes and whether the

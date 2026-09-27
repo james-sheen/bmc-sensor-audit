@@ -92,7 +92,17 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # command has nothing to call. Its 0.2.0 removes the old names, which this package
 # no longer writes: the suite was run against a 0.2.0 build as well as 0.1.13
 # before the ceiling admitted it.
-dependencies = ["presence-audit>=0.1.13,<0.3"]
+#
+# THE FLOOR MOVED TO 0.2.3 BECAUSE ONE MISSED READING REVERSED A FITTED GAIN.
+# The core fed each sensor's history as a gapless ladder, so a sensor that
+# missed one reading had every earlier reading placed one walk late against its
+# coupled partner. On the adopt fixture, 200 walks and a true gain of 0.004, a
+# driver missing walk 191 fitted -0.0021, which `--force` would have written.
+# 0.2.3 feeds a coupled sensor from its last miss on and reports the cut, and
+# `adopt --list` prints it. MEASURED both ways:
+# `tests/test_a_missed_reading_does_not_move_the_fit.py` is 5 failed on 0.2.2
+# with this package's previous code, on the numbers themselves, and 5 passed on 0.2.3.
+dependencies = ["presence-audit>=0.2.3,<0.3"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was

@@ -597,9 +597,9 @@ def _cmd_detect(args: argparse.Namespace) -> int:
         span = _walk_span(walks)
         if span:
             # The verdict is over the values; this is over the clock. The engine is
-            # told every sample is a minute old regardless of when the walk was
+            # told the walks are one declared interval apart, whenever they were
             # taken, so `frozen` alone does not say whether the reading held still
-            # for a minute or for a shift. That distinction is only in the stamps.
+            # for one interval or for a shift. That distinction is only in the stamps.
             print(f"\n{len(walks)} walks covering {span}")
         target = args.walk[-1]
     else:
@@ -793,8 +793,8 @@ def _stores_refusal(args: argparse.Namespace) -> str | None:
     """
     if getattr(args, "history", None) and args.walk:
         return ("--history keeps readings for a later run to grade forecasts "
-                "against, and a recorded walk has no instant of its own: its "
-                "readings are stamped in a ladder ending NOW, so writing them to "
+                "against, and a recorded walk is not fed at the instant it was "
+                "taken: its readings go in a ladder ending NOW, so writing them to "
                 "a durable store would put invented times into a record another "
                 "run trusts. Use --history with --target")
     if args.resident and not args.target:
@@ -1283,11 +1283,34 @@ def _no_spread(proposal) -> str:
             f"until a spread is stated with its basis.")
 
 
+def _cut_lines(feed_result) -> list[str]:
+    """The sensors fed only from their last missed reading on, and what it cost.
+
+    A coupling endpoint that missed one reading in one walk used to be fed with
+    every earlier reading a slot out of place, and the fit paired the driver
+    with the wrong walk of the driven: one missed reading of 200 fitted -0.0021
+    against a true 0.004. The core now feeds such a sensor from its last miss
+    on. Said here because the fit below then rests on fewer walks than were
+    passed, and `n` alone does not say why.
+    """
+    if not feed_result.cut:
+        return []
+    lines = ["", "Fed only from the last missed reading on, so each reading "
+                 "stays in its own walk's slot:"]
+    for name, entry in sorted(feed_result.cut.items()):
+        lines.append(f"  {name}: {entry['fed']} of {entry['fed'] + entry['not_fed']} "
+                     f"readings; it missed walk {entry['missed']} of "
+                     f"{entry['captures']}")
+    return lines
+
+
 def _render_proposals(candidates, feed_result) -> str:
     """What was fitted, and what each one would be adopted on."""
     if not candidates:
-        return ("Nothing fitted. A coupling is fitted only when both ends were "
-                "reading across enough paired changes; `detect` reports which.")
+        return "\n".join(
+            ["Nothing fitted. A coupling is fitted only when both ends were "
+             "reading across enough paired changes; `detect` reports which."]
+            + _cut_lines(feed_result))
     lines = [f"Fitted on a {feed_result.interval_seconds:g}s collection grid:", ""]
     for candidate in candidates:
         lines.append(f"  {candidate.id}")
@@ -1313,7 +1336,7 @@ def _render_proposals(candidates, feed_result) -> str:
         else:
             lines.append("      replay: none -- "
                          f"{candidate.replay.get('reason')}")
-    return "\n".join(lines)
+    return "\n".join(lines + _cut_lines(feed_result))
 
 
 def _cmd_regression(args: argparse.Namespace) -> int:
