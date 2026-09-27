@@ -21,10 +21,19 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.7**, tagged `v0.3.7`, Apache-2.0, on PyPI as
+**Released — 0.3.8**, tagged `v0.3.8`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.8 refuses a run over nothing.** A walk sensor with no name, or a walk file that is
+missing or is not JSON, is refused by name with exit 2 on `coverage`, `detect`,
+`regression` and `adopt`, where each crashed with exit 1, which reads as findings.
+`regression` refuses two walks holding no sensor instead of answering *No changes*,
+`declare` records an anomaly for a configuration entry with no name instead of
+dropping it, and `validate-attestation` flags an attestation that attests nothing.
+The loop test reads declines through the engine's own walker, so `detect` needs
+`arbiter-engine` 0.2.15.
 
 **0.3.7 speaks the core's `point` and names what could explain a finding.**
 `presence-audit` 0.1.13 named its subject `point`, and this package now writes and

@@ -134,7 +134,14 @@ dependencies = ["presence-audit>=0.1.13,<0.3"]
 # arrived in 0.2.13, as did the decline beside a cause the ranking cannot score
 # (`cpt_missing`), which `detect` prints. Below it the loop has a stage the
 # engine cannot answer.
-detect = ["arbiter-engine>=0.2.13,<0.3"]
+#
+# 0.2.15 IS THE FLOOR BECAUSE THE LOOP READS DECLINES THROUGH THE ENGINE'S WALKER.
+# `declined_reasons` and `unpublished_reasons` ship beside the vocabularies from
+# 0.2.15, and the loop's copy of that walk is gone. Measured on 0.2.14: the ten
+# loop tests fail on the import, the fifty-eight engine-bridge tests refuse at
+# setup because 0.2.14 is below this pin, as they are built to, and the other 941
+# pass. So this floor is the loop's; nothing `detect` calls moved in 0.2.15.
+detect = ["arbiter-engine>=0.2.15,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]

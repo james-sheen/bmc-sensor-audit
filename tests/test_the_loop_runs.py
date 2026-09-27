@@ -54,41 +54,28 @@ def _engine():
 
 
 def _published() -> set:
-    from arbiter_engine.subenvelope import VOCABULARIES
-    from arbiter_engine.types import NotEvaluatedReason
+    from arbiter_engine.subenvelope import PUBLISHED_REASONS
 
-    return {reason.value for reason in NotEvaluatedReason}.union(*VOCABULARIES.values())
-
-
-#: Where a payload lists what it declined, one row per decline with its reason.
-#: `not_fitted` is the learn leg's: a coupling it could not fit, and why.
-DECLINE_LISTS = ("not_checked", "declines", "not_fitted")
+    return set(PUBLISHED_REASONS)
 
 
+# THE WALK IS THE ENGINE'S. This file and operating-health-audit's each carried a
+# copy of it, and the copies drifted: this one read four lists, the other two, so a
+# learn-stage refusal under `not_fitted` passed the other's check unread. Engine
+# 0.2.15 publishes the walker beside the names it checks against, and both loops
+# call it -- a list the engine starts reporting declines under is read here the
+# day it ships, without a copy to update.
 def _reasons(payload) -> list:
     """Every decline reason anywhere in a payload, however deeply it is mounted."""
-    found = []
+    from arbiter_engine.subenvelope import declined_reasons
 
-    def walk(node):
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in DECLINE_LISTS and isinstance(value, list):
-                    found.extend(item.get("reason") for item in value
-                                 if isinstance(item, dict))
-                elif key == "declined" and isinstance(value, list):
-                    found.extend(v for v in value if isinstance(v, str))
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(payload)
-    return found
+    return declined_reasons(payload)
 
 
 def _unpublished(payload) -> list:
-    published = _published()
-    return sorted({r for r in _reasons(payload) if r not in published})
+    from arbiter_engine.subenvelope import unpublished_reasons
+
+    return unpublished_reasons(payload)
 
 
 def _walk(ambient: float, step: int):
@@ -287,6 +274,8 @@ def test_the_vocabularies_are_not_empty():
     """Before believing a negative, prove the probe can produce one."""
     _engine()
     assert "insufficient_samples" in _published() and "no_objective" in _published()
-    for where in DECLINE_LISTS:
+    from arbiter_engine.subenvelope import DECLINE_KEYS
+
+    for where in DECLINE_KEYS:
         assert _unpublished({where: [{"reason": "made_up_here"}]}) == ["made_up_here"]
     assert _unpublished({"declined": ["made_up_here"]}) == ["made_up_here"]
