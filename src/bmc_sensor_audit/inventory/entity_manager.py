@@ -406,6 +406,15 @@ def _read_entry(
     """
     channels, unrecognised = _channel_names(entry)
     if not channels:
+        # SAID, NOT DROPPED. An entry naming no channel declares nothing this tool
+        # can match to a sensor, and it used to vanish without an anomaly: strip the
+        # names from a board's entries and `declare` reported fewer sensors and zero
+        # anomalies, which reads as a smaller board rather than an unreadable file.
+        anomalies.append(Anomaly(
+            "unnamed_entry", source,
+            f"an Exposes entry of Type {entry.get('Type')!r} carries no usable "
+            f"`Name` or `Name<n>`, so nothing it declares can be matched to a sensor. "
+            f"It is left undeclared rather than guessed at"))
         return
     primary = channels[0][1]
 

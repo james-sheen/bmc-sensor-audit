@@ -39,7 +39,7 @@ from . import redfish_schema
 __all__ = ["LiveSensor", "Walk", "RedfishClient", "walk_chassis", "read_sensor_object",
            "walk_from_dict", "order_walks", "validate_walk", "walk_digest",
            "etag_cache", "membership_unchanged", "ETAG_CACHE_FORMAT",
-           "CertificatePinError",
+           "CertificatePinError", "WalkFileError",
            "WALK_FORMAT", "LEGACY_RESOURCES"]
 
 WALK_FORMAT = "bmc-sensor-audit/walk/1"
@@ -208,6 +208,15 @@ class Walk:
 
 class CertificatePinError(Exception):
     """The BMC presented a certificate that is not the pinned one."""
+
+
+class WalkFileError(Exception):
+    """A recorded walk this tool cannot read, said by name.
+
+    `validate_walk` already names each of these; the reader indexed the same keys
+    directly, so the commands that load a walk raised instead -- a traceback that
+    exits `1`, which this family reads as FINDINGS about a board nobody read.
+    """
 
 
 def _fingerprint(der: bytes) -> str:
@@ -658,6 +667,8 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
     responses they want to diff without re-walking. The format marker decides;
     an unmarked payload is read as raw objects.
     """
+    if not isinstance(payload, dict):
+        raise WalkFileError(f"the walk is {type(payload).__name__}, not an object")
     walk = Walk()
     walk.errors = [tuple(e) for e in payload.get("errors", ())]
     walk.latencies = [(str(p), float(t))
@@ -672,6 +683,18 @@ def walk_from_dict(payload: dict[str, Any]) -> Walk:
         # Defaulting it to True would make every capture ever written claim its
         # sensors carried no undeclared properties, on no evidence at all.
         walk.fields_observed = bool(payload.get("fields_observed", False))
+        # THE IDENTITY FIRST, and every missing one at once. The loop below
+        # indexes `name` directly; a sensor without one raised KeyError out of
+        # every command that loads a walk, while `validate_walk` names the same
+        # fault in this sentence.
+        nameless = [index for index, item in enumerate(payload.get("sensors", ()))
+                    if not isinstance(item, dict) or not isinstance(item.get("name"), str)
+                    or not item.get("name")]
+        if nameless:
+            more = f" and {len(nameless) - 1} more" if len(nameless) > 1 else ""
+            raise WalkFileError(
+                f"sensors[{nameless[0]}]{more} carries no 'name'; every other field "
+                f"on a sensor is optional and this one is the identity")
         for item in payload.get("sensors", ()):
             thresholds: dict[tuple[str, str], float] = {}
             for slot, value in (item.get("thresholds") or {}).items():

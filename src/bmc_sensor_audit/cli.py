@@ -40,7 +40,7 @@ from presence_audit import exit_contract as _exit_contract
 from presence_audit.diff import compare
 from .inventory.entity_manager import load_declaration
 from .inventory.redfish import (CertificatePinError, RedfishClient, Walk,
-                                order_walks, validate_walk,
+                                WalkFileError, order_walks, validate_walk,
                                 etag_cache, membership_unchanged,
                                 walk_chassis, walk_digest, walk_from_dict)
 from presence_audit.regression import compare_walks, parse_prefix_map
@@ -75,8 +75,21 @@ def _load_recorded_walk(path: str) -> Walk:
     Recording once and diffing repeatedly is how the firmware-upgrade gate works:
     capture before, capture after, compare both against the config. It is also
     how the test suite runs with no hardware in the room.
+
+    Every way the file can fail to be a walk is a `WalkFileError` naming the path:
+    a missing file, a file that is not JSON, and a walk the reader cannot read.
+    Each used to escape as a traceback, and a traceback exits `1`.
     """
-    return walk_from_dict(json.loads(Path(path).read_text()))
+    try:
+        payload = json.loads(Path(path).read_text())
+    except OSError as error:
+        raise WalkFileError(f"cannot read the walk {path}: {error}") from None
+    except json.JSONDecodeError as error:
+        raise WalkFileError(f"{path} is not parseable as JSON: {error}") from None
+    try:
+        return walk_from_dict(payload)
+    except WalkFileError as error:
+        raise WalkFileError(f"{path}: {error}") from None
 
 
 def _walk_span(walks: list[Walk]) -> str | None:
@@ -1320,6 +1333,16 @@ def _cmd_regression(args: argparse.Namespace) -> int:
 
     before = _load_recorded_walk(args.before)
     after = _load_recorded_walk(args.after)
+    # TWO EMPTY WALKS COMPARE AS NOTHING, not as a clean upgrade. Each is a legal
+    # capture of a chassis reporting no sensor, and the diff of two of them pairs,
+    # removes and adds nothing -- which printed *No changes. Every sensor reported
+    # before is reported now* and exited 0, over no sensor at all. Read off this
+    # package's own walks, so it holds on every core in the declared range.
+    if not before.sensors and not after.sensors:
+        print(f"neither {args.before} nor {args.after} holds a single sensor, so no "
+              f"change could have been seen: two empty walks compare as nothing, "
+              f"not as a clean upgrade", file=sys.stderr)
+        return EXIT_INCOMPLETE
 
     # The two captures are named, not sorted. `order_walks` exists because a glob
     # hands over lexical order; here the operator has typed which is which, and
@@ -1377,6 +1400,17 @@ def _cmd_validate_attestation(args: argparse.Namespace) -> int:
         return EXIT_INCOMPLETE
 
     problems = validate_attestation(artifact)
+    # AN ATTESTATION OF NOTHING, refused here as well as in the core, so the
+    # refusal holds on every core this package admits; the core's own sentence is
+    # the one printed where it has it. A run over an empty walk writes a valid
+    # artifact recording zero entities checked, which reads like a clean board.
+    checked = artifact.get("checked") if isinstance(artifact, dict) else None
+    if (isinstance(checked, dict) and checked.get("entities") == 0
+            and not any("checked.entities" in problem for problem in problems)):
+        problems.append(
+            "checked.entities is 0: the run this artifact records put nothing in "
+            "front of the engine, so it attests nothing -- and an empty judgment "
+            "reads exactly like a clean one")
     if problems:
         print(f"{args.path}: {len(problems)} problem(s)", file=sys.stderr)
         for problem in problems:
@@ -1696,7 +1730,10 @@ def build_parser() -> argparse.ArgumentParser:
 # PluginError joins these because a vertical that could not be loaded is a
 # refusal with something to say, not a traceback from somewhere downstream
 # about a vocabulary nobody supplied.
-REFUSALS = (CredentialError, CertificatePinError, PluginError)
+# WalkFileError joins them because a walk the reader cannot read -- a sensor with
+# no name, a file that is not JSON, a path that is not there -- escaped as a
+# traceback from every command that loads one.
+REFUSALS = (CredentialError, CertificatePinError, PluginError, WalkFileError)
 
 
 class _StdoutThatOutlivesItsReader:
