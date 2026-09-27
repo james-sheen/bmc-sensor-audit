@@ -280,14 +280,25 @@ class TestTheReadmeTestCount:
         only the first would have turned this test into an error on any environment
         that runs the suite without git installed.
         """
+        # WITHOUT GIT THE FILES ARE READ OFF THE DISK, AND FILTERED THE SAME WAY.
+        # The fallback used to hand pytest the whole directory, where `--ignore`
+        # names one engine-dependent module and the derived list below names every
+        # one -- so an sdist, which has no `.git`, counted both `adopt` modules
+        # whenever the engine was installed: 958 against the README's 913, a
+        # population difference nothing names. A tree with no git is still this
+        # repository's tree; only the question of which files it holds changes.
         try:
             listed = subprocess.run(["git", "ls-files", "--", "tests/test_*.py"],
                                     cwd=str(ROOT), capture_output=True, text=True)
+            paths = [line for line in listed.stdout.split() if line]
+            if listed.returncode != 0:
+                paths = []
         except OSError:
-            return [str(ROOT / "tests")]
-        paths = [line for line in listed.stdout.split() if line]
-        if listed.returncode != 0 or not paths:
-            return [str(ROOT / "tests")]
+            paths = []
+        if not paths:
+            paths = sorted(str(path.relative_to(ROOT))
+                           for path in (ROOT / "tests").glob("test_*.py"))
+        assert paths, "no test files under tests/, by git or on disk"
         # The engine-dependent exclusion is applied HERE and not left to `--ignore`.
         # `--ignore` filters directory collection; it does not suppress a file named
         # explicitly on the command line, so once this returns paths instead of a
