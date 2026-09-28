@@ -21,10 +21,16 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.8**, tagged `v0.3.8`, Apache-2.0, on PyPI as
+**Released — 0.3.9**, tagged `v0.3.9`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.9 no longer fits a coupling across a missed reading.** One missed reading
+used to put every earlier reading of that sensor a walk out of line with its
+partner, and `adopt` proposed a gain of the wrong sign: -0.0021 against a true
+0.004 on its own fixture. With `presence-audit` 0.2.3, now the floor, a coupled
+sensor is fed from its last miss on, and `adopt --list` prints what that left.
 
 **0.3.8 refuses a run over nothing.** A walk sensor with no name, or a walk file that is
 missing or is not JSON, is refused by name with exit 2 on `coverage`, `detect`,
