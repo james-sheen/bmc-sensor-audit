@@ -333,7 +333,7 @@ class TestACombinationThatWouldDoNothingIsRefused:
         argv = ["detect", "--config", str(bench["config"]),
                 "--walk", "w.json", "--history", "h.sqlite"]
         assert cli.main(argv) == cli.EXIT_INCOMPLETE
-        assert "invented times" in capsys.readouterr().err
+        assert "moved times" in capsys.readouterr().err
 
     def test_keeping_walks_without_resident_is_refused(self, bench):
         assert cli.main(_argv(bench, "--keep-walks",

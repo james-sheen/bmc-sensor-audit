@@ -102,7 +102,18 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # `adopt --list` prints it. MEASURED both ways:
 # `tests/test_a_missed_reading_does_not_move_the_fit.py` is 5 failed on 0.2.2
 # with this package's previous code, on the numbers themselves, and 5 passed on 0.2.3.
-dependencies = ["presence-audit>=0.2.3,<0.3"]
+#
+# THEN TO 0.2.4, BECAUSE THE CUT COST THE FIT ITS HISTORY. A late miss left too
+# few pairs and nothing was fitted. 0.2.4 can place each recorded walk in the grid
+# slot its capture time falls in, keeping every other pair, and `detect` and
+# `adopt` do so, judged as of the newest walk, when `--by-capture-time` asks.
+# Without it every walk keeps the 0.2.3 path. MEASURED both ways:
+# `tests/test_recorded_walks_are_placed_by_their_own_time.py` is 13 failed with
+# this code on 0.2.3, which cannot place by capture time -- the one pass is the
+# refusal that returns before the core is reached -- and 14 passed on 0.2.4.
+# With 0.3.9's code on 0.2.4 it is 11 failed and 3 passed, and the three are
+# the cases without the flag: 0.3.9's behaviour is the default.
+dependencies = ["presence-audit>=0.2.4,<0.3"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was

@@ -811,17 +811,28 @@ changes what a later audit asserts, and it should not be possible against a
 printout of a file that has since been edited — then writes `gain` and a
 `gain_basis` sentence carrying the support the decision rested on.
 
-**A sensor that missed a reading is fitted from its last miss on.** Walks are fed
-one collection slot apart, in order, and a slot cannot be left empty. So a
-missed reading put every earlier reading of that sensor one walk out of line
-with its partner. On `adopt`'s own test fixture, one miss at walk 191 of 200
-fitted -0.0021 against a true 0.004. With `presence-audit` 0.2.3, such a sensor is
-fed from the walk after its last miss, and `adopt --list` prints how many
-readings that left.
+**Walks can be placed by the time they were taken.** Pass `--by-capture-time` to
+`adopt`, or to `detect` with `--walk`, and each walk takes the collection slot its
+capture time falls in, as `capture` and `--keep-walks` record it. A walk nobody
+took leaves its slot empty, and the run is judged as of the newest walk. A
+missed reading is then an empty slot, not a shift: on `adopt`'s own test
+fixture, a miss at walk 191 of 200 fits the true 0.004 on 197 pairs, and twenty
+missing walks fit it on 177. `adopt --list` prints how many walks filled how
+many slots, and the largest distance a time moved to reach its slot. Walks with
+no time, or two walks in one slot, are refused with exit 2.
 
-A walk that was never taken still closes up, and walk times are not yet read.
-[`presence-audit`'s README](https://github.com/james-sheen/presence-audit#where-a-reading-lands-in-time)
-says what that waits for.
+**It is asked for, because a time is not a cadence.** The model's windows count
+declared intervals, so the declared cadence has to be the one the walks were
+taken at. Measured on twelve walks of a frozen fan at a declared 60 s: placed by
+time, walks taken 2 s apart are refused, and walks taken an hour apart pass with
+the fan frozen; placed in order, the fan is found both times. When more slots
+come out empty than filled, the run says so.
+
+Without the flag, walks are placed one slot apart in the order given, as before
+0.3.10. There a missed reading costs history. A coupled sensor is fed from the
+walk after its last miss, and `adopt --list` prints how many readings that left;
+a late miss leaves nothing to fit. [`presence-audit`'s README](https://github.com/james-sheen/presence-audit#where-a-reading-lands-in-time)
+has the numbers for both.
 
 **It writes the spread beside it.** The engine proposes a `gain_sigma` with every
 fitted gain, the standard error of the fit, and `adopt` writes it with a

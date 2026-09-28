@@ -596,10 +596,11 @@ def _cmd_detect(args: argparse.Namespace) -> int:
             print(f"\n{ordering}", file=sys.stderr)
         span = _walk_span(walks)
         if span:
-            # The verdict is over the values; this is over the clock. The engine is
-            # told the walks are one declared interval apart, whenever they were
-            # taken, so `frozen` alone does not say whether the reading held still
-            # for one interval or for a shift. That distinction is only in the stamps.
+            # The verdict is over the values; this is over the clock. Unless
+            # --by-capture-time places them by their times, the engine is told the
+            # walks are one declared interval apart, whenever they were taken, so
+            # `frozen` alone does not say whether the reading held still for one
+            # interval or for a shift. That distinction is only in the stamps.
             print(f"\n{len(walks)} walks covering {span}")
         target = args.walk[-1]
     else:
@@ -628,7 +629,7 @@ def _cmd_detect(args: argparse.Namespace) -> int:
               "Stage 1 coverage above is complete and unaffected.", file=sys.stderr)
         return EXIT_INCOMPLETE
 
-    from presence_audit.feeder import evaluate, feed
+    from presence_audit.feeder import PlacementError, evaluate, feed
     from presence_audit.generator import DEFAULT_SAMPLE_INTERVAL_S, generate
     from presence_audit.supplemental import (SupplementalError, load_supplemental,
                                       unmatched_names)
@@ -706,69 +707,82 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     session = EngineSession(history=history, ledger=ledger)
     session.load_model(model_path)
 
-    feed_result = feed(session, manifest, reports)
-    envelope = check(session).to_dict()
-    described = model_describe(session).to_dict()
-    outcome = evaluate(envelope, described, manifest,
-                       strict_declines=args.strict_declines,
-                       feed_result=feed_result)
+    # WHERE EACH WALK LANDS IN TIME: in the order given, one declared interval
+    # apart, unless the operator asks for the times the walks carry. See
+    # `_timed_by` for why that is never inferred from the stamps alone.
+    timed_by = _timed_by(args)
+    try:
+        feed_result = feed(session, manifest, reports, timed_by=timed_by)
+    except PlacementError as error:
+        print(f"\n--by-capture-time cannot place these walks: {error}",
+              file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+    note = _sparse_note(feed_result)
+    if note:
+        print(f"\n{note}", file=sys.stderr)
+    with _pinned(feed_result):
+        envelope = check(session).to_dict()
+        described = model_describe(session).to_dict()
+        outcome = evaluate(envelope, described, manifest,
+                           strict_declines=args.strict_declines,
+                           feed_result=feed_result)
 
-    if args.attest_out:
-        # After `check`, never before: `attest` refuses on an unchecked session with
-        # `source: unavailable`, and that refusal reads a lot like a clean run.
-        from arbiter_engine.api import attest
+        if args.attest_out:
+            # After `check`, never before: `attest` refuses on an unchecked session with
+            # `source: unavailable`, and that refusal reads a lot like a clean run.
+            from arbiter_engine.api import attest
 
-        from presence_audit.attestation import build_attestation
-        # The artifact leaves through a different door from every committed file,
-        # and the hygiene perimeter guards commits. `target` is a Redfish URL by
-        # default, so an artifact uploaded from CI can publish an internal hostname
-        # in a channel no hook ever scans. The label is the operator's override; no
-        # guessing at which hostnames look internal happens here, because that is
-        # pattern-matching a judgement only they can make.
-        artifact = build_attestation(session, envelope, described, manifest,
-                                     target=args.attest_target_label or target,
-                                     attest_fn=attest, spelled=True)
-        Path(args.attest_out).write_text(json.dumps(artifact, indent=2))
+            from presence_audit.attestation import build_attestation
+            # The artifact leaves through a different door from every committed file,
+            # and the hygiene perimeter guards commits. `target` is a Redfish URL by
+            # default, so an artifact uploaded from CI can publish an internal hostname
+            # in a channel no hook ever scans. The label is the operator's override; no
+            # guessing at which hostnames look internal happens here, because that is
+            # pattern-matching a judgement only they can make.
+            artifact = build_attestation(session, envelope, described, manifest,
+                                         target=args.attest_target_label or target,
+                                         attest_fn=attest, spelled=True)
+            Path(args.attest_out).write_text(json.dumps(artifact, indent=2))
 
-        # Said on the terminal, not only inside the file. The artifact already
-        # accounts for this honestly -- `unattested` is a required field and the
-        # shipped validator reads it -- but an operator who asked for evidence and
-        # received an artifact carrying none finds that out only by opening it.
-        # A quiet gap is not a false claim, and it is still a gap nobody sees.
-        #
-        # No exit floor: `check` completed and its findings stand. What did not
-        # complete is the evidence the engine attaches to them, which is a weaker
-        # thing than the audit itself.
-        from presence_audit.report import unattested_notice
+            # Said on the terminal, not only inside the file. The artifact already
+            # accounts for this honestly -- `unattested` is a required field and the
+            # shipped validator reads it -- but an operator who asked for evidence and
+            # received an artifact carrying none finds that out only by opening it.
+            # A quiet gap is not a false claim, and it is still a gap nobody sees.
+            #
+            # No exit floor: `check` completed and its findings stand. What did not
+            # complete is the evidence the engine attaches to them, which is a weaker
+            # thing than the audit itself.
+            from presence_audit.report import unattested_notice
 
-        notice = unattested_notice(artifact, args.attest_out)
-        if notice:
-            print(f"\n{notice}", file=sys.stderr)
-    print(detect_as_text(outcome, feed_result))
-    ranking = _rankings_as_text(session, envelope, manifest)
-    if ranking:
-        print(ranking)
+            notice = unattested_notice(artifact, args.attest_out)
+            if notice:
+                print(f"\n{notice}", file=sys.stderr)
+        print(detect_as_text(outcome, feed_result))
+        ranking = _rankings_as_text(session, envelope, manifest)
+        if ranking:
+            print(ranking)
 
-    if ledger is not None:
-        if args.walk:
-            # A recorded reading has no future anyone will read it against, so a
-            # forecast from it could only ever mature `ungradeable`.
-            print("\nledger: nothing filed -- recorded walks have no future a "
-                  "later run could read a forecast against", file=sys.stderr)
-        else:
-            issued, rolled, withheld = _file_forecasts(session, manifest,
-                                                       horizon, cadence)
-            for reason in withheld:
-                print(f"coupling filed nothing -- {reason}", file=sys.stderr)
-            print(f"\nfiled {issued} forecast(s)"
-                  + (f" and {rolled} coupling value(s)" if rolled else "")
-                  + f", {horizon:g}s ahead, into {args.ledger}")
-            print(_ledger_line(ledger))
-            if history is None:
-                print("a later run can grade these only against readings taken "
-                      "near the moment they mature, and this run's readings end "
-                      "with it: pass --history PATH, or run --resident",
-                      file=sys.stderr)
+        if ledger is not None:
+            if args.walk:
+                # A recorded reading has no future anyone will read it against, so a
+                # forecast from it could only ever mature `ungradeable`.
+                print("\nledger: nothing filed -- recorded walks have no future a "
+                      "later run could read a forecast against", file=sys.stderr)
+            else:
+                issued, rolled, withheld = _file_forecasts(session, manifest,
+                                                           horizon, cadence)
+                for reason in withheld:
+                    print(f"coupling filed nothing -- {reason}", file=sys.stderr)
+                print(f"\nfiled {issued} forecast(s)"
+                      + (f" and {rolled} coupling value(s)" if rolled else "")
+                      + f", {horizon:g}s ahead, into {args.ledger}")
+                print(_ledger_line(ledger))
+                if history is None:
+                    print("a later run can grade these only against readings taken "
+                          "near the moment they mature, and this run's readings end "
+                          "with it: pass --history PATH, or run --resident",
+                          file=sys.stderr)
 
     # Composed, not merged. The worse of the four wins, and `2` outranks `1` because
     # could-not-complete is a different claim from something-got-worse. The config
@@ -793,10 +807,15 @@ def _stores_refusal(args: argparse.Namespace) -> str | None:
     """
     if getattr(args, "history", None) and args.walk:
         return ("--history keeps readings for a later run to grade forecasts "
-                "against, and a recorded walk is not fed at the instant it was "
-                "taken: its readings go in a ladder ending NOW, so writing them to "
-                "a durable store would put invented times into a record another "
-                "run trusts. Use --history with --target")
+                "against, at the instants they were taken, and a recorded walk is "
+                "not fed at that instant: it takes a slot of a ladder ending NOW, "
+                "or with --by-capture-time the grid slot its time falls in. "
+                "Writing either to a durable store would put moved times into a "
+                "record another run trusts. Use --history with --target")
+    if getattr(args, "by_capture_time", False) and not args.walk:
+        return ("--by-capture-time places recorded walks by the times they "
+                "carry, and this run walks a live target: one reading, taken at "
+                "the clock. Pass --walk, or drop it")
     if args.resident and not args.target:
         return ("--resident walks the same live target again and again; it "
                 "needs --target. Recorded walks already hold their whole history")
@@ -1137,7 +1156,7 @@ def _cmd_adopt(args: argparse.Namespace) -> int:
               "    pip install 'bmc-sensor-audit[detect]'", file=sys.stderr)
         return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
 
-    from presence_audit.feeder import feed
+    from presence_audit.feeder import PlacementError, feed
     from presence_audit.generator import generate
     from presence_audit.supplemental import (SupplementalError, load_supplemental,
                                              unmatched_names)
@@ -1188,7 +1207,17 @@ def _cmd_adopt(args: argparse.Namespace) -> int:
         model_path = handle.name
     session = EngineSession()
     session.load_model(model_path)
-    feed_result = feed(session, manifest, reports)
+    # Placed as `detect` places recorded walks, so the two commands fit and
+    # judge one series on one clock.
+    try:
+        feed_result = feed(session, manifest, reports, timed_by=_timed_by(args))
+    except PlacementError as error:
+        print(f"--by-capture-time cannot place these walks: {error}",
+              file=sys.stderr)
+        return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
+    note = _sparse_note(feed_result)
+    if note:
+        print(note, file=sys.stderr)
 
     corpus = None
     if args.surprises:
@@ -1205,7 +1234,8 @@ def _cmd_adopt(args: argparse.Namespace) -> int:
                 print(f"    {decline}", file=sys.stderr)
             return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
 
-    described = model_describe(session, corpus).to_dict()
+    with _pinned(feed_result):
+        described = model_describe(session, corpus).to_dict()
     candidates = _adopt.proposals(described, manifest,
                                   grid_seconds=feed_result.interval_seconds)
 
@@ -1283,15 +1313,91 @@ def _no_spread(proposal) -> str:
             f"until a spread is stated with its basis.")
 
 
+def _timed_by(args: argparse.Namespace) -> str:
+    """How recorded walks are placed in time: by the times they carry when the
+    operator passes `--by-capture-time`, otherwise one declared interval apart
+    in the order given.
+
+    ASKED FOR, NEVER INFERRED FROM THE STAMPS. A walk's time says when it was
+    taken, not that it was taken at the declared cadence, and the model's
+    windows count declared intervals. Measured on twelve stamped walks of a
+    frozen fan, declared cadence 60 s: placed by time, walks taken 2 s apart
+    share slots and are refused, and walks taken an hour apart leave every
+    window holding one reading, so the frozen fan passes; placed in order, it
+    is found both times. A harness capturing walks back to back is the first
+    case, and it is how two consumers of this package exercise it.
+    """
+    from presence_audit.feeder import TIMED_BY_CAPTURE, TIMED_BY_INTERVAL
+
+    return (TIMED_BY_CAPTURE if getattr(args, "by_capture_time", False)
+            else TIMED_BY_INTERVAL)
+
+
+def _sparse_note(feed_result) -> str | None:
+    """Why a run placed by time may judge less than it looks, when it may.
+
+    More empty slots than walks means the walks were taken further apart than
+    the declared cadence, and a window that counts declared slots then holds
+    fewer readings than it counts: a frozen reading can pass. Said, not
+    refused -- the operator asked for these times, and the empty slots are
+    what they say.
+    """
+    from presence_audit.feeder import TIMED_BY_CAPTURE
+
+    timing = getattr(feed_result, "timing", None) or {}
+    if (timing.get("timed_by") != TIMED_BY_CAPTURE
+            or timing["empty_slots"] <= timing["captures"]):
+        return None
+    return (f"{timing['empty_slots']} of {timing['slots']} slots are empty: these "
+            f"walks were taken further apart than the declared "
+            f"{timing['interval_seconds']:g}s, and a window counts declared slots, "
+            f"so it holds fewer readings than it counts. Declare the cadence the "
+            f"walks were taken at")
+
+
+def _pinned(feed_result):
+    """The engine's clock for judging what was fed: the newest walk's own time
+    when the walks were placed by their capture times, because their readings
+    are where they were taken and every window ends at the clock. On the grid,
+    the clock as it is: that ladder already ends at it."""
+    from contextlib import nullcontext
+
+    judged = getattr(feed_result, "judged_at", None)
+    if judged is None:
+        return nullcontext()
+    from arbiter_engine.api import as_of
+
+    return as_of(judged)
+
+
+def _timing_lines(feed_result) -> list[str]:
+    """Where the walks were placed, when they were placed by capture time.
+
+    Nothing on the grid, which prints what it always printed. By capture time,
+    the largest snap is the one number nothing else shows: a collector drifting
+    from its declared cadence moves it, and not the fit.
+    """
+    from presence_audit.feeder import TIMED_BY_CAPTURE
+
+    timing = getattr(feed_result, "timing", None) or {}
+    if timing.get("timed_by") != TIMED_BY_CAPTURE:
+        return []
+    return ["", f"Placed by each walk's capture time: {timing['captures']} walks in "
+                f"{timing['slots']} slots of {timing['interval_seconds']:g}s, "
+                f"{timing['empty_slots']} empty; the largest snap to a slot was "
+                f"{timing['largest_offset_s']:g}s, as of {timing['last']}"]
+
+
 def _cut_lines(feed_result) -> list[str]:
     """The sensors fed only from their last missed reading on, and what it cost.
 
     A coupling endpoint that missed one reading in one walk used to be fed with
     every earlier reading a slot out of place, and the fit paired the driver
     with the wrong walk of the driven: one missed reading of 200 fitted -0.0021
-    against a true 0.004. The core now feeds such a sensor from its last miss
-    on. Said here because the fit below then rests on fewer walks than were
-    passed, and `n` alone does not say why.
+    against a true 0.004. On the grid the core feeds such a sensor from its last
+    miss on. Said here because the fit below then rests on fewer walks than were
+    passed, and `n` alone does not say why. Walks placed by their capture times
+    are never cut: a missed reading is an empty slot there, not a shift.
     """
     if not feed_result.cut:
         return []
@@ -1310,7 +1416,7 @@ def _render_proposals(candidates, feed_result) -> str:
         return "\n".join(
             ["Nothing fitted. A coupling is fitted only when both ends were "
              "reading across enough paired changes; `detect` reports which."]
-            + _cut_lines(feed_result))
+            + _timing_lines(feed_result) + _cut_lines(feed_result))
     lines = [f"Fitted on a {feed_result.interval_seconds:g}s collection grid:", ""]
     for candidate in candidates:
         lines.append(f"  {candidate.id}")
@@ -1336,7 +1442,8 @@ def _render_proposals(candidates, feed_result) -> str:
         else:
             lines.append("      replay: none -- "
                          f"{candidate.replay.get('reason')}")
-    return "\n".join(lines + _cut_lines(feed_result))
+    return "\n".join(lines + _timing_lines(feed_result)
+                     + _cut_lines(feed_result))
 
 
 def _cmd_regression(args: argparse.Namespace) -> int:
@@ -1659,6 +1766,14 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--horizon", type=float, metavar="SECONDS",
                         help="how far ahead each forecast is filed; defaults to "
                              "one collection step")
+    detect.add_argument("--by-capture-time", action="store_true",
+                        help="place each --walk in the collection slot its own "
+                             "capture time falls in, leave the slots of walks "
+                             "nobody took empty, and judge the run as of the "
+                             "newest walk. Every walk must carry a time, and the "
+                             "declared cadence must be the one they were taken "
+                             "at. Without it, walks are placed one declared "
+                             "interval apart in the order given")
     detect.add_argument("--keep-walks", metavar="DIR",
                         help="write each --resident cycle's walk into DIR, one "
                              "file per cycle named by its instant, so `adopt "
@@ -1698,6 +1813,13 @@ def build_parser() -> argparse.ArgumentParser:
     adopt.add_argument("--include-disabled", action="store_true")
     adopt.add_argument("--no-stuck-at", action="store_true",
                        help="do not expect readings to vary")
+    adopt.add_argument("--by-capture-time", action="store_true",
+                       help="fit on each walk placed in the collection slot its "
+                            "own capture time falls in, so a missed reading or "
+                            "walk is an empty slot rather than a shift. Every "
+                            "walk must carry a time. Without it, walks are "
+                            "placed one declared interval apart in the order "
+                            "given")
     adopt.set_defaults(func=_cmd_adopt)
 
     validate = subparsers.add_parser(

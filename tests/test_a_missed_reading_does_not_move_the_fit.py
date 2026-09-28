@@ -17,8 +17,10 @@ outside its interval.
 and says so. So a miss early in the run leaves a fit on the walks after it,
 which recovers the truth. A late miss leaves too few paired changes, so nothing
 is fitted. Both outcomes are true statements, and this file holds both. Walks
-here carry no capture time, because the feeder never reads one. That is the
-next thing the core owes, and its README says why it waits.
+here carry no capture time, so they are placed on the declared grid by their
+order, which is the path these numbers describe. With `--by-capture-time`, walks
+that carry one are placed by it and keep every other pair:
+`test_recorded_walks_are_placed_by_their_own_time.py`.
 """
 
 from __future__ import annotations
