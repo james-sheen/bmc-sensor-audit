@@ -177,8 +177,12 @@ class TestEveryStageAnswersOrDeclinesByName:
         described = loop["cycles"][0]["described"]
         stages = {name: row["declared"] for name, row in
                   described["model"]["stages"].items()}
-        assert stages == {"check": True, "hypothesize": True, "plan": False,
-                          "act": True, "learn": True, "case": True}
+        # Read by lookup, as the engine's compatibility policy asks of every
+        # reader: a patch release may add a stage, and one not named here means
+        # the engine is newer than this test, not that the board changed.
+        named = {"check": True, "hypothesize": True, "plan": False,
+                 "act": True, "learn": True, "case": True}
+        assert {name: stages.get(name) for name in named} == named
         assert _unpublished(described) == []
 
     def test_hypothesize(self, loop):
