@@ -162,7 +162,16 @@ dependencies = ["presence-audit>=0.2.4,<0.3"]
 # loop tests fail on the import, the fifty-eight engine-bridge tests refuse at
 # setup because 0.2.14 is below this pin, as they are built to, and the other 941
 # pass. So this floor is the loop's; nothing `detect` calls moved in 0.2.15.
-detect = ["arbiter-engine>=0.2.15,<0.3"]
+#
+# 0.2.18 IS THE FLOOR FOR THE SAME KIND OF REASON. The loop reads what 0.2.18
+# adds: `gaps` locating a power balance the board file declares and a walk
+# breaks, the `gaps` and `confirm` case stages, and the rank a confirmed cause
+# held. Measured on 0.2.17: the six loop tests that read them fail (four) or
+# error at their fixture (two), the fifty-eight engine-bridge tests refuse at
+# setup because 0.2.17 is below this pin, as they are built to, and the other
+# 959 pass. The suite as it stood before this change passed unchanged on 0.2.18,
+# so this floor too is the loop's.
+detect = ["arbiter-engine>=0.2.18,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]
