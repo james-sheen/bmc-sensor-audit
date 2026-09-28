@@ -21,10 +21,17 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.10**, tagged `v0.3.10`, Apache-2.0, on PyPI as
+**Released — 0.3.11**, tagged `v0.3.11`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.11 reads every field of the loop that engine 0.2.18 adds.** The loop test now
+checks that `gaps` locates a supply whose input power does not reach its output --
+the board file declares that balance from the supply's own PMBus labels -- that a
+confirmed fan is read back against the ranking made before it, and that the ranking
+names the fan as the reading it rests on. The `[detect]` extra needs
+`arbiter-engine` 0.2.18; what the commands print is unchanged.
 
 **0.3.10 can place recorded walks by the time they were taken.** With
 `--by-capture-time`, `detect` and `adopt` put each walk in the collection slot its
