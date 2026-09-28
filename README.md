@@ -21,10 +21,17 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.9**, tagged `v0.3.9`, Apache-2.0, on PyPI as
+**Released — 0.3.10**, tagged `v0.3.10`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.10 can place recorded walks by the time they were taken.** With
+`--by-capture-time`, `detect` and `adopt` put each walk in the collection slot its
+time falls in and judge the run as of the newest walk, so a missed reading or a
+missing walk is an empty slot. On `adopt`'s own fixture a miss at walk 191 then
+fits the true 0.004 on 197 pairs, where the order-placed run fits nothing. Without
+the flag nothing changes. `presence-audit` 0.2.4 is the floor.
 
 **0.3.9 no longer fits a coupling across a missed reading.** One missed reading
 used to put every earlier reading of that sensor a walk out of line with its
