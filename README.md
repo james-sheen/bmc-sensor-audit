@@ -21,10 +21,17 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.11**, tagged `v0.3.11`, Apache-2.0, on PyPI as
+**Released — 0.3.12**, tagged `v0.3.12`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
+
+**0.3.12 prints the reading to take first, and keeps cases.** Beside each ranking
+`detect` prints `read first:`, the one reading the engine's ranking rests on most.
+With `--case-severity` and `--case-checks`, each finding opens a case in the
+`--ledger` file that every later walk is checked into, and `confirm` and `cases`
+record and read what settled one. The `[detect]` extra needs `arbiter-engine`
+0.2.20.
 
 **0.3.11 reads every field of the loop that engine 0.2.18 adds.** The loop test now
 checks that `gaps` locates a supply whose input power does not reach its output --
