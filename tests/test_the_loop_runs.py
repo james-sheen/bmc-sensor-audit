@@ -348,9 +348,12 @@ class TestTheCaseIsOpenedRunAndResolved:
         the fan stood first of one, and the reading it named settled it. Counts,
         never a rate."""
         confirmed = loop["book"]["cases"]["confirmed"]
-        assert confirmed["rows"] == [{
-            "case_id": loop["case"], "cause": FAN, "rank": 1, "of": 1,
-            "named_reading_settled_it": True}]
+        # BY LOOKUP. A row is a record the engine may add keys to in a patch
+        # release -- 0.2.20 added three -- and an equality on the whole row
+        # broke on the first one.
+        [row] = confirmed["rows"]
+        assert (row["case_id"], row["cause"], row["rank"], row["of"],
+                row["named_reading_settled_it"]) == (loop["case"], FAN, 1, 1, True)
         assert (confirmed["confirmations"], confirmed["ranked_first"],
                 confirmed["not_ranked"]) == (1, 1, 0)
         assert _unpublished(loop["confirmed"]) == []
