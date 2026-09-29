@@ -21,6 +21,13 @@ came from asking what this project handles that no other one does, rather than
 from a general checklist. Treat a clean run as the absence of known shapes, not
 as evidence the diff is safe to publish.
 
+ONE CHECK READS BYTES, NOT TEXT. Every rule matches patterns in text, so a binary
+file was never looked inside -- and the engine's durable ledger and history are
+SQLite files that record a real system under the names of what was watched: its
+cases, confirmations, forecasts and readings. `databases` reads each file's first
+sixteen bytes and refuses a SQLite database whatever it is called. `.gitignore`
+refuses the usual extensions; this is the check that does not depend on a name.
+
 THE EXEMPTION MARKER. A line ending in `hygiene: synthetic` is skipped. It exists
 because the redaction tests must contain realistic-looking asset tags in order to
 assert that they never reach a capture -- the check and the test want the same
@@ -295,6 +302,37 @@ def _matches_in(line: str, rules: list[Rule]):
             break
 
 
+#: The first sixteen bytes of every SQLite database, whatever the file is called.
+SQLITE_HEADER = b"SQLite format 3\x00"
+
+#: Why one is refused, printed beside its path.
+DATABASE_WHY = ("a SQLite database -- a ledger or history holds a real system's "
+                "cases, forecasts or readings under the names of what it watched; "
+                "keep it with that system's records, never in a repository")
+
+
+def databases(paths: list[Path], root: Path) -> list[Path]:
+    """Every file among `paths` that is a SQLite database, read by its header.
+
+    The name is not consulted: a ledger saved as `review.ledger` is the same
+    record as one saved as `ledger.db`, and only the second is caught by an
+    ignore rule. Text that merely names the format is not one -- the header is
+    matched at the first byte, NUL included.
+    """
+    found: list[Path] = []
+    for relative in paths:
+        path = root / relative
+        if SKIP_PARTS & set(relative.parts) or not path.is_file():
+            continue
+        try:
+            with path.open("rb") as handle:
+                if handle.read(len(SQLITE_HEADER)) == SQLITE_HEADER:
+                    found.append(relative)
+        except OSError:
+            continue
+    return found
+
+
 def scan(paths: list[Path], root: Path,
          rules: list[Rule] | None = None) -> list[tuple[Path, int, Rule, str]]:
     if rules is None:
@@ -454,9 +492,19 @@ def main(argv: list[str] | None = None) -> int:
               "no site-specific vocabulary is being checked")
 
     hits = scan(paths, root, rules=RULES + local)
-    if not hits:
+    stored = databases(paths, root)
+    if not hits and not stored:
         print(f"hygiene: {len(paths)} file(s) scanned, nothing found")
         return EXIT_CLEAN
+
+    if stored:
+        print(f"hygiene: {len(stored)} SQLite database(s) -- commit refused\n",
+              file=sys.stderr)
+        for path in stored:
+            print(f"  {path}  {DATABASE_WHY}", file=sys.stderr)
+        if not hits:
+            return EXIT_FOUND
+        print("", file=sys.stderr)
 
     print(f"hygiene: {len(hits)} finding(s) -- commit refused\n", file=sys.stderr)
     for path, number, rule, matched in hits:

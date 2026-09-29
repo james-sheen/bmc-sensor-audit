@@ -237,3 +237,46 @@ def test_a_match_is_never_printed(capsys, tmp_path, monkeypatch):
     captured = capsys.readouterr()
     assert "github_pat_" not in captured.err + captured.out
     assert "characters on this line" in captured.err
+
+
+class TestADatabaseIsRefusedWhateverItIsCalled:
+    """A ledger or history is a SQLite file, and every rule above reads text, so
+    none of them ever looked inside one. The check reads the first sixteen bytes,
+    so the file is refused for what it is rather than for what it is called."""
+
+    @staticmethod
+    def _database(path: Path) -> Path:
+        import sqlite3
+
+        # A table, because a connection that writes nothing leaves an empty file
+        # with no header in it.
+        with sqlite3.connect(str(path)) as db:
+            db.execute("CREATE TABLE cases (case_id TEXT)")
+        return path
+
+    def test_a_database_under_any_name_is_found(self, tmp_path):
+        self._database(tmp_path / "review.ledger")
+        assert hygiene_check.databases([Path("review.ledger")], tmp_path) == [
+            Path("review.ledger")]
+
+    def test_text_that_names_the_format_is_not_one(self, tmp_path):
+        (tmp_path / "notes.md").write_text("SQLite format 3 is what a ledger is\n")
+        assert hygiene_check.databases([Path("notes.md")], tmp_path) == []
+
+    def test_the_header_counts_only_at_the_first_byte(self, tmp_path):
+        (tmp_path / "blob.bin").write_bytes(b"x" + hygiene_check.SQLITE_HEADER)
+        assert hygiene_check.databases([Path("blob.bin")], tmp_path) == []
+
+    def test_the_hook_refuses_one(self, capsys, tmp_path, monkeypatch):
+        self._database(tmp_path / "review.ledger")
+        monkeypatch.setattr(hygiene_check, "_staged_files",
+                            lambda: [Path("review.ledger")])
+        code = hygiene_check.main(["--root", str(tmp_path)])
+        assert code == hygiene_check.EXIT_FOUND
+        assert "review.ledger  a SQLite database" in capsys.readouterr().err
+
+    def test_the_repository_holds_none(self):
+        """The noise floor again: a database in this tree is one a sweep refuses."""
+        root = Path(__file__).resolve().parents[1]
+        paths = [p.relative_to(root) for p in sorted(root.rglob("*")) if p.is_file()]
+        assert hygiene_check.databases(paths, root) == []
