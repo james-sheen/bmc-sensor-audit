@@ -953,6 +953,14 @@ that settled it was the one the ranking named. A confirmation is not a surprise
 entry -- every case begins with a finding, so a corpus written from them would
 hold nothing but detections.
 
+**It does not plan, and that is its scope rather than a gap.** The engine's `plan`
+ranks declared actions against a declared goal, and a sensor audit holds no lever.
+The board file can declare an action but gives it no values to try, has no key for
+a goal, and its one coupling runs from inlet temperature to the fan -- from a
+reading nobody sets to the actuator -- so no action could reach anything through
+it. On a board `plan` declines by name -- `no_objective`, or `no_candidates` for an
+action with no values to try -- and the loop test reads that as the answer it is.
+
 **`--keep-walks DIR` keeps what a resident run walked**, one file per cycle named
 by its instant. `adopt` fits from walks, and a resident run otherwise kept its
 readings only in `--history`, so a day of grading a board left nothing to adopt a
