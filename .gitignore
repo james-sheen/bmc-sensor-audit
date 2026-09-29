@@ -17,3 +17,12 @@ venv/
 # private name must spell that name out, so committing it here would publish
 # exactly what it exists to protect. See tools/hygiene_check.py.
 .hygiene-local.json
+
+# The files `detect --ledger` and `--history` keep. A board run's ledger holds
+# its cases and forecasts and its history the readings, each keyed by a real
+# machine's sensor names -- the same disclosure as a capture. Ignored by the
+# extensions SQLite files carry, so one written in a clone cannot be committed
+# with `git add -A`.
+*.db
+*.sqlite
+*.sqlite3
