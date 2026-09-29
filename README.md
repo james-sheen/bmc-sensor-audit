@@ -248,7 +248,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **918** collected with PyYAML installed, **889** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **931** collected with PyYAML installed, **902** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
@@ -915,6 +915,36 @@ never graded, adopted or not; the engine named a missing spread as the reason,
 and a spread filed nothing either. And **no real board has produced one of these
 figures**: every number here so far came from a bench whose readings were
 generated.
+
+### Cases, and what settled one
+
+**Beside every ranking `detect` prints the reading to take first**, as `read
+first:` -- the one reading the engine's ranking rests on most. On the Mt. Jade
+file there is one declared cause, so it is the fan's own reading; where
+strengths are declared the engine weighs them, and where they are not it
+chooses by the shape of the declared graph.
+
+`--case-severity` and `--case-checks` keep a case per finding in the `--ledger`
+file. Each finding opens one on its sensor unless one is open, the ranking is
+attached, and every later walk is checked into it until that many clean checks
+in a row, with nothing at or above that severity, close it. **The number is
+yours**: the board file cannot carry it, and this package chooses none.
+Recorded walks need `--by-capture-time`, because a case counts walks by the time
+each was taken, and a run the ledger has already judged is refused rather than
+counted twice.
+
+```
+bmc-sensor-audit detect --config <entity-manager-configs> --target https://<bmc> --supplemental supplemental.json --resident --ledger ledger.sqlite --case-severity warning --case-checks 2
+bmc-sensor-audit cases --ledger ledger.sqlite
+bmc-sensor-audit confirm --ledger ledger.sqlite <case-id> --cause FAN3_1 --reading FAN3_1.reading --basis bench-check
+```
+
+`confirm` records the sensor a person found to be the cause and the reading that
+settled it, and `cases` prints the book, each confirmation read back against the
+ranking its case held before it: where the cause stood, and whether the reading
+that settled it was the one the ranking named. A confirmation is not a surprise
+entry -- every case begins with a finding, so a corpus written from them would
+hold nothing but detections.
 
 **`--keep-walks DIR` keeps what a resident run walked**, one file per cycle named
 by its instant. `adopt` fits from walks, and a resident run otherwise kept its

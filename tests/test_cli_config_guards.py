@@ -88,6 +88,28 @@ def _config_commands() -> list[str]:
 CONFIG_COMMANDS = _config_commands()
 
 
+def _ledger_commands() -> list[str]:
+    """Every subcommand that REQUIRES `--ledger` and takes no `--config`, read
+    out of the parser too: `cases` and `confirm` read what `detect --ledger`
+    kept, and are tested with the cases, not by the config rows here."""
+    from bmc_sensor_audit.cli import build_parser
+
+    found = []
+    for action in build_parser()._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for name, sub in action.choices.items():
+            options = {option: getattr(entry, "required", False)
+                       for entry in sub._actions
+                       for option in (entry.option_strings or [])}
+            if options.get("--ledger") and "--config" not in options:
+                found.append(name)
+    return sorted(found)
+
+
+LEDGER_COMMANDS = _ledger_commands()
+
+
 def _engine_backed_commands() -> set:
     """Which subcommands cannot run without the optional extra.
 
@@ -225,9 +247,19 @@ class TestTheCommandSetIsDerived:
         assert ENGINE_BACKED, (
             "no command was found to need the engine; the derivation is broken, "
             "not the CLI")
-        assert ENGINE_BACKED <= set(CONFIG_COMMANDS), (
-            f"{sorted(ENGINE_BACKED - set(CONFIG_COMMANDS))} need the engine and "
-            f"do not take --config, so the rows below never reach them")
+        # A command reading a ledger takes no --config, so the rows below never
+        # reach it by design; it is tested with the cases it reads. Anything
+        # else outside the config commands is a command these rows miss.
+        assert ENGINE_BACKED <= set(CONFIG_COMMANDS) | set(LEDGER_COMMANDS), (
+            f"{sorted(ENGINE_BACKED - set(CONFIG_COMMANDS) - set(LEDGER_COMMANDS))} "
+            f"need the engine and do not take --config, so the rows below never "
+            f"reach them")
+        assert ENGINE_BACKED & set(CONFIG_COMMANDS), (
+            "no config command needs the engine, so the carve-out below never fires")
+
+    def test_the_ledger_commands_are_the_two_that_read_cases(self):
+        """Non-vacuity for the carve-out above: derived, and exactly these."""
+        assert LEDGER_COMMANDS == ["cases", "confirm"], LEDGER_COMMANDS
 
     def test_a_command_that_does_not_need_the_engine_is_not_in_it(self):
         """The other half of non-vacuity: a set containing everything would

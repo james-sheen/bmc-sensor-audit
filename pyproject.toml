@@ -171,7 +171,15 @@ dependencies = ["presence-audit>=0.2.4,<0.3"]
 # setup because 0.2.17 is below this pin, as they are built to, and the other
 # 959 pass. The suite as it stood before this change passed unchanged on 0.2.18,
 # so this floor too is the loop's.
-detect = ["arbiter-engine>=0.2.18,<0.3"]
+#
+# 0.2.20 IS THE FLOOR BECAUSE `confirm` READS BACK THE READING THAT SETTLED A
+# CASE, and the case book reports it from 0.2.20: before it, the book said only
+# whether the named reading sat on the cause, and `confirm` would print "no
+# reading given" over a reading the operator gave. Measured on 0.2.19, paired on
+# the runner with the pin still below it: the one test that reads it fails and
+# the other 1035 pass. With the pin here, the fifty-eight engine-bridge tests
+# also refuse at setup on 0.2.19, as they are built to.
+detect = ["arbiter-engine>=0.2.20,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]

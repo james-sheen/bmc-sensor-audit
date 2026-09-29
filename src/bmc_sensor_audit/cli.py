@@ -666,6 +666,11 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     model, manifest = generate(declaration, domain_id="bmc-sensor-audit",
                                expect_variation=not args.no_stuck_at,
                                supplemental=supplemental)
+    if _cases_asked(args):
+        # The operator's number, from the command line: the board file cannot
+        # carry it, and this package chooses none.
+        model["domain"]["cases"] = {"severity": args.case_severity,
+                                    "consecutive_checks": args.case_checks}
     if args.model_out:
         Path(args.model_out).write_text(yaml.safe_dump(model))
     if args.manifest_out:
@@ -720,6 +725,12 @@ def _cmd_detect(args: argparse.Namespace) -> int:
     note = _sparse_note(feed_result)
     if note:
         print(f"\n{note}", file=sys.stderr)
+    if _cases_asked(args):
+        again = _judged_again(session, getattr(feed_result, "judged_at", None)
+                              or _now(), args.ledger)
+        if again:
+            print(f"\n{again}", file=sys.stderr)
+            return _exit_contract.compose(EXIT_INCOMPLETE, unreadable_floor)
     with _pinned(feed_result):
         envelope = check(session).to_dict()
         described = model_describe(session).to_dict()
@@ -759,9 +770,12 @@ def _cmd_detect(args: argparse.Namespace) -> int:
             if notice:
                 print(f"\n{notice}", file=sys.stderr)
         print(detect_as_text(outcome, feed_result))
-        ranking = _rankings_as_text(session, envelope, manifest)
+        answers = _answers(session, envelope)
+        ranking = _rankings_as_text(session, envelope, manifest, answers)
         if ranking:
             print(ranking)
+        if _cases_asked(args):
+            print("\n".join(_keep_cases(session, envelope, answers, args.ledger)))
 
         if ledger is not None:
             if args.walk:
@@ -829,7 +843,115 @@ def _stores_refusal(args: argparse.Namespace) -> str | None:
     if not args.resident and getattr(args, "keep_walks", None):
         return ("--keep-walks keeps the walks a resident run takes, and this run "
                 "is not resident; one walk is written with `capture --out`")
+    return _cases_refusal(args)
+
+
+def _cases_asked(args: argparse.Namespace) -> bool:
+    return (getattr(args, "case_severity", None) is not None
+            or getattr(args, "case_checks", None) is not None)
+
+
+def _cases_refusal(args: argparse.Namespace) -> str | None:
+    """The case flags, refused where they could not keep an honest case.
+
+    A case closes after a declared number of clean checks in a row, and the
+    board file cannot carry that number -- the core refuses a key it does not
+    read -- so the operator declares it here, both halves or neither. The book
+    lives in the ledger's file, and a case counts walks by the time each was
+    taken: recorded walks placed on a ladder ending at the clock would be
+    judged at a new instant on every re-run, and counted again.
+    """
+    if not _cases_asked(args):
+        return None
+    if args.case_severity is None or args.case_checks is None:
+        return ("--case-severity and --case-checks declare when a case closes, "
+                "together: that many clean checks in a row with nothing at or "
+                "above that severity. Give both, or neither")
+    if args.case_checks < 1:
+        return ("--case-checks is how many clean checks in a row close a case, a "
+                "whole number of at least 1")
+    if not getattr(args, "ledger", None):
+        return ("cases are kept in the ledger's file, so a case opened on one run "
+                "is there to be checked on the next; add --ledger PATH")
+    if args.walk and not getattr(args, "by_capture_time", False):
+        return ("a case counts walks by the time each was taken, and recorded "
+                "walks without --by-capture-time are placed on a ladder ending "
+                "at the clock, so every re-run would count them again; add "
+                "--by-capture-time")
     return None
+
+
+def _last_judged(session: Any) -> datetime | None:
+    """The latest instant the ledger's case book has judged: a case opening,
+    or a check recorded into one."""
+    from arbiter_engine.api import case_book
+
+    seen = []
+    for case in (case_book(session).to_dict().get("cases") or {}).get("cases") or ():
+        seen.append(case.get("opened_at"))
+        seen += [entry.get("at") for entry in
+                 (case.get("stages") or {}).get("check") or ()]
+    instants = []
+    for when in seen:
+        if not when:
+            continue
+        parsed = datetime.fromisoformat(str(when))
+        instants.append(parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc))
+    return max(instants) if instants else None
+
+
+def _judged_again(session: Any, judged: datetime, ledger_path: str) -> str | None:
+    """Why this run may not be judged into the case book, or None. A check is
+    recorded into every open case, so the same walks judged twice would count
+    one clean reading as two, and close a case on half the evidence."""
+    last = _last_judged(session)
+    at = judged if judged.tzinfo else judged.replace(tzinfo=timezone.utc)
+    if last is not None and at <= last:
+        return (f"{ledger_path} has judged its cases as of {last.isoformat()}, and "
+                f"this run judges {at.isoformat()}; a case counts each walk once "
+                f"-- add a later walk, or run without the case flags")
+    return None
+
+
+def _keep_cases(session: Any, envelope: dict, answers: dict[str, Any],
+                ledger_path: str) -> list[str]:
+    """A case per finding the book does not hold open, and the ranking attached
+    to each case a finding named. The check has already recorded itself into
+    every open case -- the engine does that."""
+    from arbiter_engine.api import attach_stage, case_book, open_case
+
+    book = case_book(session).to_dict().get("cases") or {}
+    held = {(case["entity_id"], case["indicator"]): case["case_id"]
+            for case in book.get("cases") or () if case.get("status") == "open"}
+    opened: list[tuple[str, str]] = []
+    declined: set[str] = set()
+    touched: dict[tuple[str, str], str] = {}
+    for finding in envelope.get("findings") or []:
+        key = (str(finding.get("entity_id")),
+               str(finding.get("problem_type") or "").split(":", 1)[-1])
+        if key not in held:
+            leg = open_case(session, key[0], key[1],
+                            basis=str(finding.get("problem_type") or "")
+                            ).to_dict().get("case") or {}
+            if not leg.get("case_id"):
+                declined |= {str(d.get("reason")) for d in leg.get("not_checked") or []
+                             if d.get("reason")}
+                continue
+            held[key] = leg["case_id"]
+            opened.append(key)
+        touched[key] = held[key]
+    for key, case_id in sorted(touched.items()):
+        if key[0] in answers:
+            attach_stage(session, case_id, "hypothesize", answers[key[0]])
+    after = case_book(session).to_dict().get("cases") or {}
+    lines = [f"\ncases: {len(opened)} opened, {after.get('open')} open, "
+             f"{after.get('resolved')} resolved -- in {ledger_path}"]
+    for key, case_id in sorted(touched.items()):
+        lines.append(f"  {case_id}  {key[0]}.{key[1]}"
+                     + ("  (opened)" if key in opened else ""))
+    if declined:
+        lines.append(f"  not opened -- {', '.join(sorted(declined))}")
+    return lines
 
 
 def _open_stores(args: argparse.Namespace) -> tuple[Any, Any]:
@@ -872,34 +994,66 @@ class _StoresUnavailable(RuntimeError):
 _COUPLING_FILING_REFUSALS = ("gain_not_adopted", "no_declared_tolerance")
 
 
-def _rankings_as_text(session: Any, envelope: dict, manifest: Any) -> str:
+def _answers(session: Any, envelope: dict) -> dict[str, Any]:
+    """The engine's ranking for each sensor with a finding, asked once each, in
+    the order the findings name them. Kept whole: the text prints part of it,
+    and a case keeps it by reference."""
+    subjects: dict[str, Any] = {}
+    for finding in envelope.get("findings") or []:
+        entity = finding.get("entity_id")
+        if entity and entity not in subjects:
+            from arbiter_engine.api import hypothesize
+
+            subjects[entity] = hypothesize(session, entity)
+    return subjects
+
+
+def _named_reading_line(leg: dict, names: dict) -> str | None:
+    """The one reading the ranking rests on most, in the operator's names.
+
+    The engine computed it for every ranking and this printed the causes alone
+    -- which, on a board declaring no strength, is a list of `unranked` and
+    nothing to do next.
+    """
+    named = leg.get("most_discriminating") or {}
+    reading = named.get("reading")
+    if not reading:
+        return None
+    entity, _, prop = str(reading).partition(".")
+    basis = named.get("basis")
+    why = {"only_candidate": "the only declared cause",
+           "strengths": "weighed by the declared strengths"}.get(basis, basis)
+    if basis == "structure" and named.get("splits"):
+        why = "splits the causes " + " to ".join(str(n) for n in named["splits"])
+    return (f"    read first: {names.get(entity, entity)}.{prop}"
+            + (f" -- {why}" if why else ""))
+
+
+def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
+                      answers: dict[str, Any] | None = None) -> str:
     """What could explain each sensor with a finding, asked of the engine.
 
     One line per sensor a declared cause reaches: the causes the engine ranked,
     with their posteriors, or the name it declined under -- `cpt_missing` where
     a fault channel is declared with no strength, which is the true answer
-    until somebody measures one. Sensors no declared cause reaches are counted
-    under the reason the engine gave, one line per reason. Nothing is printed
-    for a run with no finding, so a clean report reads exactly as it did.
-    Sensors are named as the operator's file names them; the engine's ids are
-    the generated types.
+    until somebody measures one -- and under it the one reading to take first.
+    Sensors no declared cause reaches are counted under the reason the engine
+    gave, one line per reason. Nothing is printed for a run with no finding, so
+    a clean report reads exactly as it did. Sensors are named as the operator's
+    file names them; the engine's ids are the generated types.
     """
-    subjects: list[str] = []
-    for finding in envelope.get("findings") or []:
-        entity = finding.get("entity_id")
-        if entity and entity not in subjects:
-            subjects.append(entity)
-    if not subjects:
+    if answers is None:
+        answers = _answers(session, envelope)
+    if not answers:
         return ""
-    from arbiter_engine.api import hypothesize
 
     names = {point.entity_type: point.declared_name for point in manifest.points}
     lines = ["", "What could explain it (the engine's ranking of declared causes):"]
     # Sensors no declared cause reaches share one line per reason: a board with
     # no fault channel would otherwise print the same refusal once per finding.
     unexplained: dict[str, list[str]] = {}
-    for entity in subjects:
-        leg = hypothesize(session, entity).to_dict().get("hypothesis") or {}
+    for entity, answer in answers.items():
+        leg = answer.to_dict().get("hypothesis") or {}
         declined = sorted({str(d.get("reason")) for d in leg.get("not_checked") or []
                            if d.get("reason")})
         causes = leg.get("candidates") or []
@@ -919,6 +1073,9 @@ def _rankings_as_text(session: Any, envelope: dict, manifest: Any) -> str:
                 why = ", ".join(cause.get("declined") or ()) or "no reason given"
                 ranked.append(f"{name} (unranked: {why})")
         lines.append(f"  {names.get(entity, entity)}: {'; '.join(ranked)}")
+        named = _named_reading_line(leg, names)
+        if named:
+            lines.append(named)
     for why, sensors in unexplained.items():
         shown = ", ".join(sensors[:3]) + (f" and {len(sensors) - 3} more"
                                           if len(sensors) > 3 else "")
@@ -1057,6 +1214,12 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
         kept.mkdir(parents=True, exist_ok=True)
         print(f"resident: keeping each cycle's walk in {kept}", file=sys.stderr)
     client = _client(args)
+    if _cases_asked(args):
+        probe = EngineSession(history=history, ledger=ledger)
+        again = _judged_again(probe, _now(), args.ledger)
+        if again:
+            print(f"\nresident: {again}", file=sys.stderr)
+            return EXIT_INCOMPLETE
     worst: int | None = None
     said_withheld: list[str] = []
     cycle = 0
@@ -1085,12 +1248,18 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
                     outcome = evaluate(envelope, described, manifest,
                                        strict_declines=args.strict_declines,
                                        feed_result=feed_result)
+                    answers = _answers(session, envelope)
+                    kept_cases = (_keep_cases(session, envelope, answers, args.ledger)
+                                  if _cases_asked(args) else [])
                     if cycle == 1:
                         print(as_text(report, target=args.target))
                         print(detect_as_text(outcome, feed_result))
-                        ranking = _rankings_as_text(session, envelope, manifest)
+                        ranking = _rankings_as_text(session, envelope, manifest,
+                                                    answers)
                         if ranking:
                             print(ranking)
+                        if kept_cases:
+                            print("\n".join(kept_cases))
                     issued, rolled, withheld = _file_forecasts(
                         session, manifest, horizon, cadence)
                     if withheld and withheld != said_withheld:
@@ -1107,7 +1276,9 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
                                f"{len(outcome.findings)} finding(s); filed "
                                f"{issued} forecast(s)"
                                + (f" and {rolled} coupling value(s)"
-                                  if rolled else ""))
+                                  if rolled else "")
+                               + (f"; cases {kept_cases[0].split(': ', 1)[1].split(' -- ')[0]}"
+                                  if kept_cases else ""))
                 line = _ledger_line(ledger)
             print(f"cycle {cycle} at {at:%Y-%m-%dT%H:%M:%SZ}: exit {code} -- "
                   f"{summary}; {line}")
@@ -1118,6 +1289,107 @@ def _resident(args: argparse.Namespace, declaration: Any, model_path: str,
         print(f"\nresident: stopped after {cycle} cycle(s)", file=sys.stderr)
     # No cycle completed is not a clean board: nothing was verified.
     return EXIT_INCOMPLETE if worst is None else worst
+
+
+def _case_session(ledger_path: str) -> tuple[Any, str | None]:
+    """A session on an EXISTING ledger, or why not. Opening a mistyped path
+    would create an empty ledger, and a confirmation filed there is lost."""
+    if not Path(ledger_path).is_file():
+        return None, (f"there is no ledger at {ledger_path}; `detect --ledger "
+                      f"--case-severity` keeps one")
+    try:
+        from arbiter_engine import SqlitePredictionLedger
+        from arbiter_engine.api import EngineSession
+    except ImportError as error:
+        return None, (f"cases need the optional extra, which is not installed: "
+                      f"{error}\n    pip install 'bmc-sensor-audit[detect]'")
+    return EngineSession(ledger=SqlitePredictionLedger(ledger_path)), None
+
+
+def _confirmation_line(row: dict) -> str:
+    """One confirmation, read back against the ranking its case held before it."""
+    if row.get("rank"):
+        stood = f"ranked {row['rank']} of {row['of']}"
+    elif row.get("of"):
+        stood = f"not among the {row['of']} ranked before it"
+    else:
+        stood = "no ranking came before it"
+    settled = row.get("settling_reading_was_named")
+    given, named = row.get("settling_reading"), row.get("named_reading")
+    if not given:
+        reading = "no reading given"
+    elif settled is None:
+        reading = f"settled by {given}; the ranking named no reading"
+    elif settled:
+        reading = f"settled by {given}, the reading the ranking named"
+    else:
+        reading = f"settled by {given}; the ranking named {named}"
+    return f"case {row.get('case_id')}: {row.get('cause')} {stood}; {reading}"
+
+
+def _cmd_confirm(args: argparse.Namespace) -> int:
+    """Record the cause a person confirmed, and the reading that settled it.
+
+    The engine reads it back against the last ranking the case held: where the
+    cause stood, and whether the reading that settled it was the one named. A
+    confirmation is not a surprise entry -- every case here began with a
+    finding, so a corpus written from them would hold nothing but detections.
+    """
+    session, why = _case_session(args.ledger)
+    if why:
+        print(why, file=sys.stderr)
+        return EXIT_INCOMPLETE
+    from arbiter_engine.api import attach_stage, case_book
+
+    reference = {"cause": args.cause, "basis": args.basis}
+    if args.reading:
+        reference["reading"] = args.reading
+    leg = attach_stage(session, args.case_id, "confirm",
+                       reference=reference).to_dict().get("case") or {}
+    declined = leg.get("not_checked") or []
+    for decline in declined:
+        print(f"not recorded -- {decline.get('reason')}: {decline.get('detail')}",
+              file=sys.stderr)
+    if declined:
+        return EXIT_INCOMPLETE
+    rows = [row for row in ((case_book(session).to_dict().get("cases") or {})
+                            .get("confirmed") or {}).get("rows") or []
+            if row.get("case_id") == args.case_id]
+    print(_confirmation_line(rows[-1]))
+    return EXIT_CLEAN
+
+
+def _cmd_cases(args: argparse.Namespace) -> int:
+    """Every case the ledger keeps, and each confirmation read back."""
+    session, why = _case_session(args.ledger)
+    if why:
+        print(why, file=sys.stderr)
+        return EXIT_INCOMPLETE
+    from arbiter_engine.api import case_book
+
+    book = case_book(session).to_dict().get("cases") or {}
+    if args.json:
+        print(json.dumps({key: book.get(key) for key in
+                          ("opened", "open", "resolved", "confirmed", "cases")},
+                         indent=2, default=str))
+        return EXIT_CLEAN
+    print(f"{book.get('opened')} case(s): {book.get('open')} open, "
+          f"{book.get('resolved')} resolved -- in {args.ledger}")
+    for case in book.get("cases") or []:
+        checks = ", ".join(entry.get("outcome") for entry in
+                           (case.get("stages") or {}).get("check") or [])
+        print(f"  {case['case_id']}  {case['entity_id']}.{case['indicator']}  "
+              f"{case['status']}  since {case['opened_at']}  "
+              f"checks: {checks or 'none yet'}")
+    confirmed = book.get("confirmed") or {}
+    if confirmed.get("confirmations"):
+        print(f"confirmed: {confirmed['confirmations']}, {confirmed['ranked_first']} "
+              f"ranked first; the reading that settled it was the one named in "
+              f"{confirmed.get('settling_reading_was_named')} of the "
+              f"{confirmed.get('settling_reading_given')} that gave one")
+        for row in confirmed.get("rows") or []:
+            print("  " + _confirmation_line(row))
+    return EXIT_CLEAN
 
 
 def _cmd_adopt(args: argparse.Namespace) -> int:
@@ -1780,7 +2052,33 @@ def build_parser() -> argparse.ArgumentParser:
                              "--walk` can fit from the readings this run graded "
                              "and the figures can be re-derived from the raw "
                              "walks. Resident runs only")
+    detect.add_argument("--case-severity", metavar="SEVERITY",
+                        help="keep a case per finding in the --ledger file, closed "
+                             "after --case-checks clean checks in a row with nothing "
+                             "at or above this severity (warning, critical). Your "
+                             "number: the board file cannot carry it")
+    detect.add_argument("--case-checks", type=int, metavar="N",
+                        help="how many clean checks in a row close a case")
     detect.set_defaults(func=_cmd_detect)
+
+    confirm = subparsers.add_parser(
+        "confirm", help="record the cause a person confirmed on a case")
+    confirm.add_argument("--ledger", required=True, metavar="PATH",
+                         help="the ledger `detect --case-severity` kept the case in")
+    confirm.add_argument("case_id")
+    confirm.add_argument("--cause", required=True, metavar="SENSOR",
+                         help="the sensor a person found to be the cause")
+    confirm.add_argument("--reading", metavar="SENSOR.PROPERTY",
+                         help="the reading that settled it")
+    confirm.add_argument("--basis", required=True, metavar="TEXT",
+                         help="who says so, and on what record")
+    confirm.set_defaults(func=_cmd_confirm)
+
+    cases = subparsers.add_parser("cases", help="every case a ledger keeps")
+    cases.add_argument("--ledger", required=True, metavar="PATH")
+    cases.add_argument("--json", action="store_true",
+                       help="print the engine's case book as JSON")
+    cases.set_defaults(func=_cmd_cases)
 
     adopt = subparsers.add_parser(
         "adopt",
