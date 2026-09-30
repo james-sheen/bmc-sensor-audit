@@ -358,6 +358,18 @@ class TestTheCaseIsOpenedRunAndResolved:
                 confirmed["not_ranked"]) == (1, 1, 0)
         assert _unpublished(loop["confirmed"]) == []
 
+    def test_the_book_says_that_first_place_was_not_a_posteriors(self, loop):
+        """No strength is declared on this board, so the fan stood first of one by
+        hop order and was named because it was the only candidate. Engine 0.2.23
+        says so on the row, and counts first places a posterior decided apart:
+        here, none. A hit rate read off `ranked_first` alone would count this."""
+        confirmed = loop["book"]["cases"]["confirmed"]
+        [row] = confirmed["rows"]
+        assert (row["ranked_by"], row["named_by"]) == ("hops", "only_candidate")
+        assert row["settling_entity_was_named"] is True
+        assert (confirmed["ranked_first"], confirmed["ranked_first_by_posterior"],
+                confirmed["ranked_by_posterior"]) == (1, 0, 0)
+
     def test_the_book_counts_what_it_holds(self, loop):
         book = loop["book"]["cases"]
         assert (book["opened"], book["resolved"], book["open"]) == (1, 1, 0)

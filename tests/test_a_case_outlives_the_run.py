@@ -122,8 +122,8 @@ class TestAPersonSaysWhatSettledIt:
                          "--reading", "FAN3_1.reading", "--basis", "a bench check"])
         assert code == cli.EXIT_CLEAN
         assert capsys.readouterr().out.strip() == (
-            f"case {case_id}: FAN3_1 ranked 1 of 1; settled by FAN3_1.reading, "
-            f"the reading the ranking named")
+            f"case {case_id}: FAN3_1 ranked 1 of 1 (by hop order, no strength "
+            f"declared); settled by FAN3_1.reading, the reading the ranking named")
         cli.main(["cases", "--ledger", ledger, "--json"])
         confirmed = json.loads(capsys.readouterr().out)["confirmed"]
         assert (confirmed["confirmations"], confirmed["settling_reading_was_named"]) \

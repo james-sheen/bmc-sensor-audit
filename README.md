@@ -26,6 +26,16 @@ diff between what that file declares and what the machine actually reports.
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
+**0.3.13 says what a ranking rested on, and places delayed channels by time.**
+`cases` prints beside each confirmed rank what decided it -- a posterior, or hop
+order where no strength is declared, as on this board -- and counts the first places
+a posterior decided apart from the rest. A board file may declare how long a failure
+takes to show along a fault channel, `propagation_delay_s` (presence-audit 0.2.6);
+`detect --walk` then refuses to run without `--by-capture-time`, since walks placed
+on the grid would have the engine read the cause at a time nobody took it. Recorded
+walks placed on the grid now say so. The `[detect]` extra needs `arbiter-engine`
+0.2.23.
+
 **0.3.12 prints the reading to take first, and keeps cases.** Beside each ranking
 `detect` prints `read first:`, the one reading the engine's ranking rests on most.
 With `--case-severity` and `--case-checks`, each finding opens a case in the
@@ -33,7 +43,10 @@ With `--case-severity` and `--case-checks`, each finding opens a case in the
 record and read what settled one. The `[detect]` extra needs `arbiter-engine`
 0.2.20.
 
-**0.3.11 reads every field of the loop that engine 0.2.18 adds.** The loop test now
+**0.3.11 reads what engine 0.2.18 adds to the loop, except `plan`'s.** The board
+declares no objective, so `reaches` and `decisive` on a `plan` candidate have no plan
+to come from here, and nothing reads them; this line said *every field* until 0.3.13.
+The loop test now
 checks that `gaps` locates a supply whose input power does not reach its output --
 the board file declares that balance from the supply's own PMBus labels -- that a
 confirmed fan is read back against the ranking made before it, and that the ranking
@@ -255,7 +268,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **936** collected with PyYAML installed, **907** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **942** collected with PyYAML installed, **913** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |

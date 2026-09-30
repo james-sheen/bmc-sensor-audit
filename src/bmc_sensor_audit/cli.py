@@ -655,6 +655,21 @@ def _cmd_detect(args: argparse.Namespace) -> int:
             for name in missing:
                 print(f"    {name}", file=sys.stderr)
             return EXIT_INCOMPLETE
+        # A DELAY ON A FAULT CHANNEL reads the cause that long before the finding.
+        # Recorded walks on the declared grid are placed on a ladder ending at the
+        # clock, so the delay would land on a reading taken at another time;
+        # placed by their own times it lands where it was declared. Refused, as
+        # cases are, rather than answered from the wrong reading.
+        delayed = [f"{c.source} -> {c.target}" for c in supplemental.fault_channels
+                   if (getattr(c, "propagation_delay_s", None) or 0) > 0]
+        if delayed and args.walk and not getattr(args, "by_capture_time", False):
+            print(f"\n{args.supplemental} declares a delay on {len(delayed)} fault "
+                  f"channel(s) ({', '.join(delayed)}): the engine reads a cause that "
+                  f"long before its finding, and recorded walks without "
+                  f"--by-capture-time are placed on a ladder ending at the clock, "
+                  f"so the cause would be read at a time nobody took it; add "
+                  f"--by-capture-time", file=sys.stderr)
+            return EXIT_INCOMPLETE
         # Printed whether or not anything is missing a number, so the reader sees
         # what was declared before they read a verdict that rests on it.
         print(supplemental_as_text(supplemental))
@@ -770,6 +785,13 @@ def _cmd_detect(args: argparse.Namespace) -> int:
             if notice:
                 print(f"\n{notice}", file=sys.stderr)
         print(detect_as_text(outcome, feed_result))
+        if args.walk:
+            # The core's report says where walks placed by their own times landed;
+            # this says it for the grid, so a reader of either knows which clock
+            # the verdict was judged on.
+            grid = _grid_lines(feed_result)
+            if grid:
+                print("\n".join(grid))
         answers = _answers(session, envelope)
         ranking = _rankings_as_text(session, envelope, manifest, answers)
         if ranking:
@@ -1306,10 +1328,18 @@ def _case_session(ledger_path: str) -> tuple[Any, str | None]:
     return EngineSession(ledger=SqlitePredictionLedger(ledger_path)), None
 
 
+#: What a ranking's order rested on, as the engine reports it on a confirmed row.
+_RANKED_BY = {"posterior": "by posterior", "hops": "by hop order, no strength declared",
+              "mixed": "partly by posterior, partly by hop order"}
+
+
 def _confirmation_line(row: dict) -> str:
     """One confirmation, read back against the ranking its case held before it."""
     if row.get("rank"):
         stood = f"ranked {row['rank']} of {row['of']}"
+        rested = _RANKED_BY.get(row.get("ranked_by"))
+        if rested:
+            stood += f" ({rested})"
     elif row.get("of"):
         stood = f"not among the {row['of']} ranked before it"
     else:
@@ -1322,6 +1352,8 @@ def _confirmation_line(row: dict) -> str:
         reading = f"settled by {given}; the ranking named no reading"
     elif settled:
         reading = f"settled by {given}, the reading the ranking named"
+    elif row.get("settling_entity_was_named"):
+        reading = f"settled by {given}; the ranking named {named}, on the same sensor"
     else:
         reading = f"settled by {given}; the ranking named {named}"
     return f"case {row.get('case_id')}: {row.get('cause')} {stood}; {reading}"
@@ -1384,7 +1416,8 @@ def _cmd_cases(args: argparse.Namespace) -> int:
     confirmed = book.get("confirmed") or {}
     if confirmed.get("confirmations"):
         print(f"confirmed: {confirmed['confirmations']}, {confirmed['ranked_first']} "
-              f"ranked first; the reading that settled it was the one named in "
+              f"ranked first, {confirmed.get('ranked_first_by_posterior', 0)} of "
+              f"them by posterior; the reading that settled it was the one named in "
               f"{confirmed.get('settling_reading_was_named')} of the "
               f"{confirmed.get('settling_reading_given')} that gave one")
         for row in confirmed.get("rows") or []:
@@ -1642,18 +1675,33 @@ def _pinned(feed_result):
     return as_of(judged)
 
 
-def _timing_lines(feed_result) -> list[str]:
-    """Where the walks were placed, when they were placed by capture time.
+def _grid_lines(feed_result) -> list[str]:
+    """Where recorded walks were placed when not by their own times: one declared
+    interval apart, in the order given, the last at the clock. Said because a
+    verdict on those walks is judged on a clock the walks never read, and the
+    reader of a run placed by time is told its placement; this one was not."""
+    from presence_audit.feeder import TIMED_BY_INTERVAL
 
-    Nothing on the grid, which prints what it always printed. By capture time,
-    the largest snap is the one number nothing else shows: a collector drifting
-    from its declared cadence moves it, and not the fit.
+    timing = getattr(feed_result, "timing", None) or {}
+    if timing.get("timed_by") != TIMED_BY_INTERVAL:
+        return []
+    return ["", f"Placed on the declared grid: one walk every "
+                f"{timing['interval_seconds']:g}s in the order given, the last at "
+                f"the clock. --by-capture-time places them by the times they carry"]
+
+
+def _timing_lines(feed_result) -> list[str]:
+    """Where the walks were placed.
+
+    By capture time, the largest snap is the one number nothing else shows: a
+    collector drifting from its declared cadence moves it, and not the fit. On
+    the grid, that the walks were placed one interval apart ending at the clock.
     """
     from presence_audit.feeder import TIMED_BY_CAPTURE
 
     timing = getattr(feed_result, "timing", None) or {}
     if timing.get("timed_by") != TIMED_BY_CAPTURE:
-        return []
+        return _grid_lines(feed_result)
     return ["", f"Placed by each walk's capture time: {timing['captures']} walks in "
                 f"{timing['slots']} slots of {timing['interval_seconds']:g}s, "
                 f"{timing['empty_slots']} empty; the largest snap to a slot was "

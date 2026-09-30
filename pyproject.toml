@@ -113,7 +113,15 @@ keywords = ["openbmc", "redfish", "bmc", "entity-manager", "sensors",
 # refusal that returns before the core is reached -- and 14 passed on 0.2.4.
 # With 0.3.9's code on 0.2.4 it is 11 failed and 3 passed, and the three are
 # the cases without the flag: 0.3.9's behaviour is the default.
-dependencies = ["presence-audit>=0.2.4,<0.3"]
+#
+# THEN TO 0.2.6, BECAUSE A FAULT CHANNEL CAN SAY HOW LONG A FAILURE TAKES TO
+# SHOW. 0.2.6 reads `propagation_delay_s` on a fault channel and writes it where
+# the engine reads a dead time, and `detect --walk` then needs
+# `--by-capture-time`. MEASURED, with the engine held at the candidate:
+# `tests/test_a_delayed_fault_channel_is_read_at_its_delay.py` is 4 failed on
+# 0.2.5, which refuses the key by name, and 5 passed on the tree that becomes
+# 0.2.6; the other 985 pass on both.
+dependencies = ["presence-audit>=0.2.6,<0.3"]
 
 [project.optional-dependencies]
 # **The floor is DERIVED, not chosen.** Every published release inside the range was
@@ -179,7 +187,13 @@ dependencies = ["presence-audit>=0.2.4,<0.3"]
 # the runner with the pin still below it: the one test that reads it fails and
 # the other 1035 pass. With the pin here, the fifty-eight engine-bridge tests
 # also refuse at setup on 0.2.19, as they are built to.
-detect = ["arbiter-engine>=0.2.20,<0.3"]
+#
+# 0.2.23 IS THE FLOOR BECAUSE `cases` AND `confirm` SAY WHAT A RANK RESTED ON.
+# The case book reports it from 0.2.23 -- a posterior, or hop order where no
+# strength is declared, as on this board -- and the loop test pins it. Measured
+# on 0.2.22, paired on the runner with the pin still below it: exactly the two
+# tests that read it fail, and the other 1045 pass.
+detect = ["arbiter-engine>=0.2.23,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]
