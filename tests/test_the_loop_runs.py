@@ -215,6 +215,31 @@ def supplies(request, tmp_path_factory):
     return request.param, residuals
 
 
+@pytest.fixture(scope="module")
+def sixteen(tmp_path_factory):
+    """Sixteen resident cycles with the zone over its bound throughout and the fan
+    inside its own: by the last, every check on the fan has its samples, so the
+    walk up from the zone screens the fan, and `gaps` is asked of that cycle."""
+    api = _engine()
+    from arbiter_engine import InMemoryObservationHistory
+
+    from presence_audit.diff import compare
+    from presence_audit.feeder import feed
+
+    declaration, model_path, manifest = _board(tmp_path_factory.mktemp("sixteen"))
+    history = InMemoryObservationHistory()
+    for step in range(16):
+        at = START + timedelta(seconds=CADENCE * step)
+        with api.as_of(at):
+            session = api.EngineSession(history=history)
+            session.load_model(str(model_path))
+            feed(session, manifest, [compare(declaration, _walk(60.0, step))])
+            api.check(session)
+            walk = api.hypothesize(session, TEMP).to_dict()["hypothesis"]["walk"]
+            residuals = api.gaps(session).to_dict()["residuals"]
+    return walk, residuals
+
+
 class TestEveryStageAnswersOrDeclinesByName:
 
     def test_sense(self, loop):
@@ -387,6 +412,24 @@ class TestTheCaseIsOpenedRunAndResolved:
         book = loop["book"]["cases"]
         assert (book["opened"], book["resolved"], book["open"]) == (1, 1, 0)
         assert _unpublished(loop["book"]) == []
+
+
+class TestGapsSaysWhereTheWalkEnds:
+
+    def test_a_finding_every_declared_cause_screens_is_located(self, sixteen):
+        """The zone over its bound and the fan, its only declared cause, reading
+        sound: the finding is unexplained, which on this board is the true
+        answer, and `gaps` says so (engine 0.2.30). `drives` joins the zone to
+        the fan, but the fan shows nothing and the two are joined causally
+        already, so no undeclared channel is a candidate."""
+        walk, residuals = sixteen
+        assert walk["state"] == "unexplained"
+        [row] = [h for h in residuals["hypotheses"]
+                 if h["kind"] == "unexplained_finding"]
+        assert (row["at"], row["screened"], row["candidates"]) == (TEMP, [FAN], [])
+        assert "no relation without a causal direction" in row["reason"]
+        assert residuals["checked"]["walk_states"]["unexplained"] == 1
+        assert _unpublished(residuals) == []
 
 
 class TestAPowerBalanceThatDoesNotCloseIsLocated:

@@ -199,7 +199,13 @@ dependencies = ["presence-audit>=0.2.6,<0.3"]
 # only while a cause is open, a rank ordered by standing -- and the loop pins the
 # fan as never the place the fault stops. Measured on 0.2.26 with the pin still
 # below it: exactly the six tests that read it fail, and the other 1054 pass.
-detect = ["arbiter-engine>=0.2.27,<0.3"]
+#
+# 0.2.30 IS THE FLOOR BECAUSE THE LOOP READS WHERE THE WALK ENDS. `gaps` says so
+# from 0.2.30, and on sixteen cycles of this board the loop pins the zone's finding
+# as unexplained -- the fan, its only declared cause, reads sound -- with no
+# undeclared channel to offer. Measured on 0.2.29 with the pin still below it:
+# exactly the one test that reads it fails, and the other 1051 pass.
+detect = ["arbiter-engine>=0.2.30,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]
