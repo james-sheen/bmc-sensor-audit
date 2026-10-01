@@ -74,10 +74,33 @@ def test_an_unscored_cause_says_why_in_a_name_a_reader_can_look_up(tmp_path, cap
     published = {r.value for r in NotEvaluatedReason}.union(*VOCABULARIES.values())
     out = _detect(tmp_path, capsys, (55.0, 56.0))
     ranking = out[out.index(HEADER):]
-    assert re.search(r"^  TS4_Temp: FAN3_1 \(unranked: cpt_missing\)$", ranking,
-                     re.M), ranking
-    for reasons in re.findall(r"\(unranked: ([^)]*)\)", ranking):
+    assert re.search(r"^  TS4_Temp: FAN3_1 \(unranked: cpt_missing; own reading: [^)]+\)$",
+                     ranking, re.M), ranking
+    for reasons in re.findall(r"\(unranked: ([^;)]*)", ranking):
         assert set(reasons.split(", ")) <= published, reasons
+
+
+def test_each_cause_says_what_its_own_reading_said(tmp_path, capsys, monkeypatch):
+    """The engine computes what each candidate's own reading said, and this
+    printed the causes without it, so a cause that read sound and one that read
+    faulty looked alike. Derived from the engine's answer rather than written
+    down, so the line follows the engine when what a reading counts as moves."""
+    api = _engine()
+    legs = []
+    original = api.hypothesize
+
+    def spy(session, entity_id, *args, **kwargs):
+        answer = original(session, entity_id, *args, **kwargs)
+        legs.append(answer.to_dict().get("hypothesis") or {})
+        return answer
+
+    monkeypatch.setattr(api, "hypothesize", spy)
+    out = _detect(tmp_path, capsys, (55.0, 56.0))
+    ranking = out[out.index(HEADER):]
+    causes = [cause for leg in legs for cause in leg.get("candidates") or []]
+    assert causes, "the engine ranked no cause to compare with"
+    for cause in causes:
+        assert cli._own_reading(cause.get("own_reading")) in ranking, (cause, ranking)
 
 
 def test_a_clean_run_prints_no_ranking(tmp_path, capsys):

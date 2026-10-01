@@ -1051,6 +1051,20 @@ def _named_reading_line(leg: dict, names: dict) -> str | None:
             + (f" -- {why}" if why else ""))
 
 
+def _own_reading(reading: Any) -> str:
+    """What a cause's own reading said, as the engine computed it.
+
+    The engine computes it for every candidate, and this printed the causes
+    without it, so a cause that read sound was listed beside one that read
+    faulty with nothing to tell them apart. `none` where the engine gave no
+    state: nothing read, or a check on it declined.
+    """
+    if not isinstance(reading, dict) or not reading.get("state"):
+        return "own reading: none"
+    severity = reading.get("severity")
+    return f"own reading: {reading['state']}" + (f", {severity}" if severity else "")
+
+
 def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
                       answers: dict[str, Any] | None = None) -> str:
     """What could explain each sensor with a finding, asked of the engine.
@@ -1058,7 +1072,8 @@ def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
     One line per sensor a declared cause reaches: the causes the engine ranked,
     with their posteriors, or the name it declined under -- `cpt_missing` where
     a fault channel is declared with no strength, which is the true answer
-    until somebody measures one -- and under it the one reading to take first.
+    until somebody measures one -- each with what its own reading said, and
+    under it the one reading to take first.
     Sensors no declared cause reaches are counted under the reason the engine
     gave, one line per reason. Nothing is printed for a run with no finding, so
     a clean report reads exactly as it did. Sensors are named as the operator's
@@ -1087,13 +1102,14 @@ def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
         for cause in causes[:3]:
             name = names.get(cause.get("cause"), cause.get("cause"))
             posterior = cause.get("posterior")
+            own = _own_reading(cause.get("own_reading"))
             if isinstance(posterior, (int, float)):
-                ranked.append(f"{name} {posterior:.2f}")
+                ranked.append(f"{name} {posterior:.2f} ({own})")
             else:
                 # A cause the engine named and could not score, with the reason
                 # it gave -- `cpt_missing` for a channel nobody gave a strength.
                 why = ", ".join(cause.get("declined") or ()) or "no reason given"
-                ranked.append(f"{name} (unranked: {why})")
+                ranked.append(f"{name} (unranked: {why}; {own})")
         lines.append(f"  {names.get(entity, entity)}: {'; '.join(ranked)}")
         named = _named_reading_line(leg, names)
         if named:

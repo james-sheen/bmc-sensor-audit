@@ -106,7 +106,7 @@ class TestACaseOutlivesTheRun:
     def test_the_ranking_names_the_reading_to_take_first(self, tmp_path, capsys):
         _engine()
         _code, out, _err = _detect(capsys, _walks(tmp_path)[:2])
-        assert re.search(r"^  TS4_Temp: FAN3_1 \(unranked: cpt_missing\)$\n"
+        assert re.search(r"^  TS4_Temp: FAN3_1 \(unranked: cpt_missing; own reading: [^)]+\)$\n"
                          r"^    read first: FAN3_1\.reading -- the only declared cause$",
                          out, re.M), out[-1500:]
 
