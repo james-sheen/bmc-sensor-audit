@@ -21,7 +21,7 @@ diff between what that file declares and what the machine actually reports.
 
 ## Status
 
-**Released — 0.3.14**, tagged `v0.3.14`, Apache-2.0, on PyPI as
+**Released — 0.3.15**, tagged `v0.3.15`, Apache-2.0, on PyPI as
 [`bmc-sensor-audit`](https://pypi.org/project/bmc-sensor-audit/). The coverage
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
