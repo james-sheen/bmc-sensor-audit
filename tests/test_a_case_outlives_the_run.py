@@ -107,6 +107,7 @@ class TestACaseOutlivesTheRun:
         _engine()
         _code, out, _err = _detect(capsys, _walks(tmp_path)[:2])
         assert re.search(r"^  TS4_Temp: FAN3_1 \(unranked: cpt_missing; own reading: [^)]+\)$\n"
+                         r"^    walk: open -- still open: FAN3_1, .*$\n"
                          r"^    read first: FAN3_1\.reading -- the only declared cause$",
                          out, re.M), out[-1500:]
 
@@ -122,8 +123,9 @@ class TestAPersonSaysWhatSettledIt:
                          "--reading", "FAN3_1.reading", "--basis", "a bench check"])
         assert code == cli.EXIT_CLEAN
         assert capsys.readouterr().out.strip() == (
-            f"case {case_id}: FAN3_1 ranked 1 of 1 (by hop order, no strength "
-            f"declared); settled by FAN3_1.reading, the reading the ranking named")
+            f"case {case_id}: FAN3_1 ranked 1 of 1 (by its standing on the walk, "
+            f"not by posterior); settled by FAN3_1.reading, the reading the ranking "
+            f"named")
         cli.main(["cases", "--ledger", ledger, "--json"])
         confirmed = json.loads(capsys.readouterr().out)["confirmed"]
         assert (confirmed["confirmations"], confirmed["settling_reading_was_named"]) \

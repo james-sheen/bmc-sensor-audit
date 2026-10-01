@@ -152,7 +152,10 @@ def loop(tmp_path_factory):
             session.load_model(str(model_path))
             fed = feed(session, manifest, [compare(declaration, _walk(ambient, step))])
             envelope = api.check(session).to_dict()
-            cycle = {"at": at, "session": session, "fed": fed, "envelope": envelope}
+            cycle = {"at": at, "session": session, "fed": fed, "envelope": envelope,
+                     # Where the walk up from the zone stood this cycle.
+                     "walk": api.hypothesize(session, TEMP).to_dict()[
+                         "hypothesis"].get("walk")}
             if step == 0:
                 cycle["described"] = api.model_describe(session).to_dict()
                 cycle["hypothesis"] = api.hypothesize(session, TEMP).to_dict()
@@ -250,6 +253,15 @@ class TestEveryStageAnswersOrDeclinesByName:
             assert candidate["declined"] == ["cpt_missing"], candidate
         assert "cpt_missing" in _published()
         assert _unpublished(payload) == []
+
+    def test_the_fan_is_open_every_cycle_and_never_the_frontier(self, loop):
+        """Its reading stays inside its bounds while its other checks lack
+        samples, so on every cycle the walk is open on the fan and the fault
+        stops nowhere: the fan is never named the place it stops."""
+        walks = [cycle["walk"] for cycle in loop["cycles"]]
+        assert [walk["state"] for walk in walks] == ["open"] * len(AMBIENT)
+        assert all(walk["frontier"] == [] for walk in walks)
+        assert all([entry["entity"] for entry in walk["open"]] == [FAN] for walk in walks)
 
     def test_the_ranking_names_the_fan_as_the_reading_it_rests_on(self, loop):
         """One candidate names itself. The fault channel is the only declared
@@ -360,12 +372,13 @@ class TestTheCaseIsOpenedRunAndResolved:
 
     def test_the_book_says_that_first_place_was_not_a_posteriors(self, loop):
         """No strength is declared on this board, so the fan stood first of one by
-        hop order and was named because it was the only candidate. Engine 0.2.23
-        says so on the row, and counts first places a posterior decided apart:
-        here, none. A hit rate read off `ranked_first` alone would count this."""
+        its standing on the walk, and was named because it was the only
+        candidate. Engine 0.2.23 says so on the row, and counts first places a
+        posterior decided apart: here, none. A hit rate read off `ranked_first`
+        alone would count this."""
         confirmed = loop["book"]["cases"]["confirmed"]
         [row] = confirmed["rows"]
-        assert (row["ranked_by"], row["named_by"]) == ("hops", "only_candidate")
+        assert (row["ranked_by"], row["named_by"]) == ("standing", "only_candidate")
         assert row["settling_entity_was_named"] is True
         assert (confirmed["ranked_first"], confirmed["ranked_first_by_posterior"],
                 confirmed["ranked_by_posterior"]) == (1, 0, 0)

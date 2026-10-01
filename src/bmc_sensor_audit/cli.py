@@ -1041,14 +1041,55 @@ def _named_reading_line(leg: dict, names: dict) -> str | None:
     reading = named.get("reading")
     if not reading:
         return None
-    entity, _, prop = str(reading).partition(".")
     basis = named.get("basis")
     why = {"only_candidate": "the only declared cause",
+           "only_open": "the only cause still open",
            "strengths": "weighed by the declared strengths"}.get(basis, basis)
-    if basis == "structure" and named.get("splits"):
-        why = "splits the causes " + " to ".join(str(n) for n in named["splits"])
-    return (f"    read first: {names.get(entity, entity)}.{prop}"
+    if basis == "screening":
+        screens = named.get("screens") or 0
+        why = (f"read clean, it would screen {screens} other "
+               f"cause{'' if screens == 1 else 's'}" if screens
+               else "the nearest cause still open")
+    return (f"    read first: {_reading_in_names(reading, names)}"
             + (f" -- {why}" if why else ""))
+
+
+def _reading_in_names(reading: Any, names: dict) -> str:
+    """`<entity>.<property>`, with the entity as the operator's file names it."""
+    entity, _, prop = str(reading).partition(".")
+    return f"{names.get(entity, entity)}.{prop}" if prop else names.get(entity, entity)
+
+
+def _walk_line(leg: dict, names: dict) -> str | None:
+    """Where the engine's walk up from the finding stopped, in the operator's names.
+
+    Its state; where the visible fault stops, each sensor with its findings; and
+    the causes still open, each with the readings it needs and why. A walk whose
+    every declared cause read clean says so: the finding is unexplained, which on
+    a board whose only declared cause reads sound is the true answer. `None` from
+    an engine that gives no walk.
+    """
+    walk = leg.get("walk") or {}
+    state = walk.get("state")
+    if not state:
+        return None
+    parts = []
+    stops = [f"{names.get(e.get('entity'), e.get('entity'))} "
+             f"({', '.join(e.get('findings') or ()) or 'a finding'})"
+             for e in walk.get("frontier") or ()]
+    if stops:
+        parts.append("the fault stops at " + "; ".join(stops))
+    still = []
+    for entry in walk.get("open") or ():
+        needs = ", ".join(f"{_reading_in_names(n.get('reading'), names)} "
+                          f"({n.get('reason')})" for n in entry.get("needs") or ())
+        still.append(names.get(entry.get("entity"), entry.get("entity"))
+                     + (f", needs {needs}" if needs else ""))
+    if still:
+        parts.append("still open: " + "; ".join(still))
+    if state == "unexplained":
+        parts.append("every declared cause read clean, or sits behind one that did")
+    return f"    walk: {state.replace('_', ' ')}" + "".join(f" -- {p}" for p in parts)
 
 
 def _own_reading(reading: Any) -> str:
@@ -1072,8 +1113,9 @@ def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
     One line per sensor a declared cause reaches: the causes the engine ranked,
     with their posteriors, or the name it declined under -- `cpt_missing` where
     a fault channel is declared with no strength, which is the true answer
-    until somebody measures one -- each with what its own reading said, and
-    under it the one reading to take first.
+    until somebody measures one -- each with what its own reading said; under
+    it where the walk stopped, and the one reading to take first while a cause
+    is still open.
     Sensors no declared cause reaches are counted under the reason the engine
     gave, one line per reason. Nothing is printed for a run with no finding, so
     a clean report reads exactly as it did. Sensors are named as the operator's
@@ -1111,6 +1153,9 @@ def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
                 why = ", ".join(cause.get("declined") or ()) or "no reason given"
                 ranked.append(f"{name} (unranked: {why}; {own})")
         lines.append(f"  {names.get(entity, entity)}: {'; '.join(ranked)}")
+        walked = _walk_line(leg, names)
+        if walked:
+            lines.append(walked)
         named = _named_reading_line(leg, names)
         if named:
             lines.append(named)
@@ -1346,7 +1391,8 @@ def _case_session(ledger_path: str) -> tuple[Any, str | None]:
 
 #: What a ranking's order rested on, as the engine reports it on a confirmed row.
 _RANKED_BY = {"posterior": "by posterior", "hops": "by hop order, no strength declared",
-              "mixed": "partly by posterior, partly by hop order"}
+              "mixed": "partly by posterior, partly by hop order",
+              "standing": "by its standing on the walk, not by posterior"}
 
 
 def _confirmation_line(row: dict) -> str:

@@ -6,6 +6,12 @@ Mt. Jade file declares one -- the zone's fan can fail into its ambient reading -
 with no strength, so the honest ranking names the fan and says why it carries no
 number. A clean run prints nothing new: the section exists only where there is a
 finding to explain.
+
+Under the causes, where the engine's walk stopped. While the fan's samples are
+short it is open, and its reading is the one to take first; once they run and
+find it inside its bounds it is screened, and the finding is unexplained -- the
+true answer on a board whose only declared cause reads sound. The fan is never
+the place the fault stops while it reads inside its bounds.
 """
 
 from __future__ import annotations
@@ -101,6 +107,29 @@ def test_each_cause_says_what_its_own_reading_said(tmp_path, capsys, monkeypatch
     assert causes, "the engine ranked no cause to compare with"
     for cause in causes:
         assert cli._own_reading(cause.get("own_reading")) in ranking, (cause, ranking)
+
+
+def test_while_the_fans_samples_are_short_its_walk_is_open(tmp_path, capsys):
+    _engine()
+    out = _detect(tmp_path, capsys, (55.0, 56.0))
+    ranking = out[out.index(HEADER):]
+    assert re.search(r"^    walk: open -- still open: FAN3_1, needs FAN3_1\.reading "
+                     r"\(insufficient_samples\)$\n"
+                     r"^    read first: FAN3_1\.reading -- the only declared cause$",
+                     ranking, re.M), ranking
+
+
+def test_once_the_fan_reads_inside_its_bounds_the_finding_is_unexplained(
+        tmp_path, capsys):
+    """Sixteen walks give every check on the fan its samples, and it reads
+    inside its bounds: screened, so nothing is left to read first."""
+    _engine()
+    out = _detect(tmp_path, capsys, (60.0,) * 16)
+    ranking = out[out.index(HEADER):]
+    assert re.search(r"^    walk: unexplained -- every declared cause read clean, "
+                     r"or sits behind one that did$", ranking, re.M), ranking
+    assert "read first:" not in ranking
+    assert "the fault stops at" not in ranking
 
 
 def test_a_clean_run_prints_no_ranking(tmp_path, capsys):

@@ -193,7 +193,13 @@ dependencies = ["presence-audit>=0.2.6,<0.3"]
 # strength is declared, as on this board -- and the loop test pins it. Measured
 # on 0.2.22, paired on the runner with the pin still below it: exactly the two
 # tests that read it fail, and the other 1045 pass.
-detect = ["arbiter-engine>=0.2.23,<0.3"]
+#
+# 0.2.27 IS THE FLOOR BECAUSE `detect` PRINTS WHERE THE WALK STOPPED. The engine
+# walks from 0.2.27 -- each cause's standing, the walk's state, the reading named
+# only while a cause is open, a rank ordered by standing -- and the loop pins the
+# fan as never the place the fault stops. Measured on 0.2.26 with the pin still
+# below it: exactly the six tests that read it fail, and the other 1054 pass.
+detect = ["arbiter-engine>=0.2.27,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]
