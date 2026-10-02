@@ -205,7 +205,13 @@ dependencies = ["presence-audit>=0.2.6,<0.3"]
 # as unexplained -- the fan, its only declared cause, reads sound -- with no
 # undeclared channel to offer. Measured on 0.2.29 with the pin still below it:
 # exactly the one test that reads it fails, and the other 1051 pass.
-detect = ["arbiter-engine>=0.2.30,<0.3"]
+#
+# 0.2.31 IS THE FLOOR BECAUSE `confirm` SAYS WHERE THE CAUSE STOOD. From 0.2.31 a
+# case keeps the walk and the book reads a confirmation back against it, and this
+# package prints it: the fan confirmed after sixteen cycles, screened on an
+# unexplained walk. Measured on 0.2.30 with the pin still below it: exactly the four
+# tests that read it fail, and the other 1061 pass.
+detect = ["arbiter-engine>=0.2.31,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]

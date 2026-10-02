@@ -122,14 +122,18 @@ class TestAPersonSaysWhatSettledIt:
         code = cli.main(["confirm", "--ledger", ledger, case_id, "--cause", "FAN3_1",
                          "--reading", "FAN3_1.reading", "--basis", "a bench check"])
         assert code == cli.EXIT_CLEAN
+        # Engine 0.2.31 says where the fan stood on the walk the case kept: two
+        # walks in, no check on it has its samples yet, so it is still open.
         assert capsys.readouterr().out.strip() == (
             f"case {case_id}: FAN3_1 ranked 1 of 1 (by its standing on the walk, "
-            f"not by posterior); settled by FAN3_1.reading, the reading the ranking "
-            f"named")
+            f"not by posterior), open on an open walk; settled by FAN3_1.reading, "
+            f"the reading the ranking named")
         cli.main(["cases", "--ledger", ledger, "--json"])
-        confirmed = json.loads(capsys.readouterr().out)["confirmed"]
+        book = json.loads(capsys.readouterr().out)
+        confirmed = book["confirmed"]
         assert (confirmed["confirmations"], confirmed["settling_reading_was_named"]) \
             == (1, 1)
+        assert (confirmed["confirmed_after_screened"], book["reopened"]) == (0, 0)
 
     def test_an_unknown_case_is_refused_by_name(self, tmp_path, capsys):
         _engine()

@@ -1395,6 +1395,29 @@ _RANKED_BY = {"posterior": "by posterior", "hops": "by hop order, no strength de
               "standing": "by its standing on the walk, not by posterior"}
 
 
+#: Where a confirmed cause stood on the last walk before it, as the engine
+#: reports it from 0.2.31.
+_STOOD = {"frontier": "at the frontier of {walk}", "trail": "on the trail of {walk}",
+          "open": "open on {walk}", "screened": "screened on {walk}",
+          "beyond_bound": "past the hop bound of {walk}",
+          "not_connected": "outside {walk}"}
+
+
+def _where_it_stood(row: dict) -> str | None:
+    """Where the cause stood on that walk, or None when the ranking kept none.
+
+    A rank alone read the walk's own surprise as a success: the fan, the board's
+    only declared cause, stood first of one even when the walk had read it
+    sound and screened it."""
+    template = _STOOD.get(row.get("standing"))
+    if template is None:
+        return None
+    state = str(row.get("walk_state") or "").replace("_", " ")
+    walk = (f"{'an' if state[:1] in 'aeiou' else 'a'} {state} walk" if state
+            else "the walk")
+    return template.format(walk=walk)
+
+
 def _confirmation_line(row: dict) -> str:
     """One confirmation, read back against the ranking its case held before it."""
     if row.get("rank"):
@@ -1406,6 +1429,9 @@ def _confirmation_line(row: dict) -> str:
         stood = f"not among the {row['of']} ranked before it"
     else:
         stood = "no ranking came before it"
+    where = _where_it_stood(row)
+    if where:
+        stood += f", {where}"
     settled = row.get("settling_reading_was_named")
     given, named = row.get("settling_reading"), row.get("named_reading")
     if not given:
@@ -1464,11 +1490,13 @@ def _cmd_cases(args: argparse.Namespace) -> int:
     book = case_book(session).to_dict().get("cases") or {}
     if args.json:
         print(json.dumps({key: book.get(key) for key in
-                          ("opened", "open", "resolved", "confirmed", "cases")},
+                          ("opened", "open", "resolved", "reopened", "confirmed",
+                           "cases")},
                          indent=2, default=str))
         return EXIT_CLEAN
     print(f"{book.get('opened')} case(s): {book.get('open')} open, "
-          f"{book.get('resolved')} resolved -- in {args.ledger}")
+          f"{book.get('resolved')} resolved, {book.get('reopened') or 0} reopened "
+          f"-- in {args.ledger}")
     for case in book.get("cases") or []:
         checks = ", ".join(entry.get("outcome") for entry in
                            (case.get("stages") or {}).get("check") or [])
@@ -1479,7 +1507,9 @@ def _cmd_cases(args: argparse.Namespace) -> int:
     if confirmed.get("confirmations"):
         print(f"confirmed: {confirmed['confirmations']}, {confirmed['ranked_first']} "
               f"ranked first, {confirmed.get('ranked_first_by_posterior', 0)} of "
-              f"them by posterior; the reading that settled it was the one named in "
+              f"them by posterior, {confirmed.get('confirmed_after_screened', 0)} "
+              f"after the walk had screened them; the reading that settled it was the "
+              f"one named in "
               f"{confirmed.get('settling_reading_was_named')} of the "
               f"{confirmed.get('settling_reading_given')} that gave one")
         for row in confirmed.get("rows") or []:

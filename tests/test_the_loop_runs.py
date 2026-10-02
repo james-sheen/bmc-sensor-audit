@@ -414,6 +414,77 @@ class TestTheCaseIsOpenedRunAndResolved:
         assert _unpublished(loop["book"]) == []
 
 
+@pytest.fixture(scope="module")
+def screened(tmp_path_factory):
+    """Sixteen resident cycles with the zone over its bound throughout and the fan
+    inside its own, a case opened at the first and the ranking attached at each,
+    then the fan confirmed: by the last cycle the walk read the fan sound and
+    screened it."""
+    api = _engine()
+    from arbiter_engine import InMemoryObservationHistory, SqlitePredictionLedger
+
+    from presence_audit.diff import compare
+    from presence_audit.feeder import feed
+
+    tmp = tmp_path_factory.mktemp("screened")
+    declaration, model_path, manifest = _board(tmp)
+    history = InMemoryObservationHistory()
+    ledger = SqlitePredictionLedger(str(tmp / "ledger.db"))
+    case_id = None
+    for step in range(16):
+        at = START + timedelta(seconds=CADENCE * step)
+        with api.as_of(at):
+            session = api.EngineSession(history=history, ledger=ledger)
+            session.load_model(str(model_path))
+            feed(session, manifest, [compare(declaration, _walk(60.0, step))])
+            api.check(session)
+            if case_id is None:
+                case_id = api.open_case(
+                    session, TEMP, "reading",
+                    basis="the ambient reading over its bound").to_dict()["case"]["case_id"]
+            api.attach_stage(session, case_id, "hypothesize",
+                             api.hypothesize(session, TEMP))
+    with api.as_of(at + timedelta(seconds=CADENCE)):
+        api.attach_stage(session, case_id, "confirm", reference={
+            "cause": FAN, "reading": f"{FAN}.reading",
+            "basis": "the loop's own record of a fixture fault"})
+        return api.case_book(session).to_dict()["cases"]
+
+
+class TestAConfirmationSaysWhereTheFanStood:
+    """The book reads a confirmation back against the walk the case kept, not only
+    against the rank (engine 0.2.31). The fan is the board's only declared cause,
+    so it is ranked first of one whatever the walk said of it."""
+
+    def test_confirmed_after_four_cycles_the_fan_was_open(self, loop):
+        """The case kept one ranking, from the first cycle, when no check on the
+        fan had its samples yet."""
+        confirmed = loop["book"]["cases"]["confirmed"]
+        [row] = confirmed["rows"]
+        assert (row["standing"], row["walk_state"], row["walks_before"]) == (
+            "open", "open", 1)
+        assert row["basis"] == "the loop's own record of a fixture fault"
+        assert confirmed["confirmed_after_screened"] == 0
+
+    def test_after_sixteen_the_walk_had_screened_the_fan(self, screened):
+        """The walk's own surprise: the fan read sound, and a person confirmed it.
+        `ranked_first` still counts it; the new total says the walk screened it."""
+        confirmed = screened["confirmed"]
+        [row] = confirmed["rows"]
+        assert (row["standing"], row["walk_state"], row["walks_before"]) == (
+            "screened", "unexplained", 16)
+        assert confirmed["confirmed_after_screened"] == 1
+        assert (row["rank"], row["of"], confirmed["ranked_first"]) == (1, 1, 1)
+        assert _unpublished(screened) == []
+
+    def test_the_confirmation_line_says_where_it_stood(self, screened):
+        from bmc_sensor_audit.cli import _confirmation_line
+
+        [row] = screened["confirmed"]["rows"]
+        assert (f"{FAN} ranked 1 of 1 (by its standing on the walk, not by "
+                f"posterior), screened on an unexplained walk;") in _confirmation_line(row)
+
+
 class TestGapsSaysWhereTheWalkEnds:
 
     def test_a_finding_every_declared_cause_screens_is_located(self, sixteen):
