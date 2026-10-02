@@ -78,9 +78,9 @@ def _unpublished(payload) -> list:
     return unpublished_reasons(payload)
 
 
-def _walk(ambient: float, step: int, supply=None):
+def _walk(ambient: float, step: int, supply=None, fan=None):
     """The zone's two points, and PSU0's input and output power when `supply`
-    gives them as `(input, output)` in watts."""
+    gives them as `(input, output)` in watts. `fan` overrides the fan's reading."""
     from bmc_sensor_audit.inventory.redfish import walk_from_dict
 
     def point(name, reading, units, thresholds):
@@ -88,7 +88,7 @@ def _walk(ambient: float, step: int, supply=None):
                 "reading": reading, "units": units, "state": "Enabled",
                 "health": "OK", "shape": "sensors", "thresholds": thresholds}
     sensors = [point(TEMP, ambient, "Cel", {"upper/critical": 50.0}),
-               point(FAN, 3000.0 + 7.0 * step, "RPM",
+               point(FAN, 3000.0 + 7.0 * step if fan is None else fan, "RPM",
                      {"upper/critical": 23100.0, "lower/critical": 500.0})]
     if supply is not None:
         sensors += [point("PSU0_PINPUT", supply[0], "W", {}),
@@ -483,6 +483,35 @@ class TestAConfirmationSaysWhereTheFanStood:
         [row] = screened["confirmed"]["rows"]
         assert (f"{FAN} ranked 1 of 1 (by its standing on the walk, not by "
                 f"posterior), screened on an unexplained walk;") in _confirmation_line(row)
+
+
+class TestTheFirstRungDown:
+    """Where the visible fault stops, what it explains below it (engine 0.2.32)."""
+
+    def test_a_stalled_fan_explains_the_hot_zone_and_its_action_applies(self, tmp_path):
+        """A fixture fault: the fan under its lower bound, the zone over its upper
+        one. The walk is traced to the fan, which explains the zone's finding; the
+        loop's fixture action on the fan applies to it."""
+        api = _engine()
+        from presence_audit.diff import compare
+        from presence_audit.feeder import feed
+
+        declaration, model_path, manifest = _board(tmp_path)
+        with api.as_of(START):
+            session = api.EngineSession()
+            session.load_model(str(model_path))
+            feed(session, manifest, [compare(declaration, _walk(60.0, 0, fan=100.0))])
+            api.check(session)
+            walk = api.hypothesize(session, TEMP).to_dict()["hypothesis"]["walk"]
+        assert walk["state"] == "traced"
+        [row] = walk["frontier"]
+        assert (row["entity"], [r["entity"] for r in row["explains"]],
+                row["findings_explained"], row["actions"]) == (FAN, [TEMP], 1, ["set_fan3"])
+
+    def test_a_fan_inside_its_bounds_is_on_no_frontier(self, loop):
+        """Every cycle of the loop: the fan sound or still short of samples, so
+        no walk has a rung to give."""
+        assert all(not cycle["walk"]["frontier"] for cycle in loop["cycles"])
 
 
 class TestGapsSaysWhereTheWalkEnds:

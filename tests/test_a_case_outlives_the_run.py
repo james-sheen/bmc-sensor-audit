@@ -112,6 +112,23 @@ class TestACaseOutlivesTheRun:
                          out, re.M), out[-1500:]
 
 
+class TestWhereTheFaultStopsSaysWhatItExplains:
+
+    def test_a_stalled_fan_is_printed_with_the_zone_it_explains(self, tmp_path, capsys):
+        """Engine 0.2.32: under the walk line, what the frontier sensor explains
+        and which declared actions apply. The shipped board declares none."""
+        _engine()
+        walks = _walks(tmp_path)[:2]
+        for path in walks:
+            walk = json.loads(Path(path).read_text())
+            walk["sensors"][1]["reading"] = 100.0
+            Path(path).write_text(json.dumps(walk))
+        _code, out, _err = _detect(capsys, walks)
+        assert re.search(r"^    walk: traced -- the fault stops at FAN3_1 \([^)]*\)$\n"
+                         r"^    below FAN3_1: explains TS4_Temp \(1 finding\); "
+                         r"actions: none declared$", out, re.M), out[-1500:]
+
+
 class TestAPersonSaysWhatSettledIt:
 
     def test_the_confirmation_is_read_back_against_the_ranking(self, tmp_path, capsys):

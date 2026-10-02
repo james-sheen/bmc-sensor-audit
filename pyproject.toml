@@ -211,7 +211,13 @@ dependencies = ["presence-audit>=0.2.6,<0.3"]
 # package prints it: the fan confirmed after sixteen cycles, screened on an
 # unexplained walk. Measured on 0.2.30 with the pin still below it: exactly the four
 # tests that read it fail, and the other 1061 pass.
-detect = ["arbiter-engine>=0.2.31,<0.3"]
+#
+# 0.2.32 IS THE FLOOR BECAUSE `detect` PRINTS WHAT THE FAULT'S STOP EXPLAINS. From
+# 0.2.32 each frontier entry says what it explains below it and which actions
+# apply, and this package prints it under the walk line. Measured on 0.2.31 with
+# the pin still below it: exactly the two tests that read it fail, and the other
+# 1065 pass.
+detect = ["arbiter-engine>=0.2.32,<0.3"]
 dev = ["pytest>=7"]
 
 [project.scripts]

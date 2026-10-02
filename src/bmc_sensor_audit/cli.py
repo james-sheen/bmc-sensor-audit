@@ -1092,6 +1092,27 @@ def _walk_line(leg: dict, names: dict) -> str | None:
     return f"    walk: {state.replace('_', ' ')}" + "".join(f" -- {p}" for p in parts)
 
 
+def _rung_lines(leg: dict, names: dict) -> list[str]:
+    """The first rung down from where the visible fault stops (engine 0.2.32): for
+    each frontier sensor, what it explains below it -- the sensors downstream along
+    declared fault channels that show a finding now -- and the declared actions
+    that apply to it. Nothing from an engine that gives no rung, and nothing on a
+    walk with no frontier, which is every walk on the shipped board while its fan
+    reads inside its bounds."""
+    lines = []
+    for entry in (leg.get("walk") or {}).get("frontier") or ():
+        if "explains" not in entry:
+            continue
+        below = ", ".join(names.get(e.get("entity"), e.get("entity"))
+                          for e in entry.get("explains") or ()) or "nothing with a finding"
+        count = entry.get("findings_explained") or 0
+        acts = ", ".join(entry.get("actions") or ()) or "none declared"
+        lines.append(f"    below {names.get(entry.get('entity'), entry.get('entity'))}: "
+                     f"explains {below} ({count} finding{'' if count == 1 else 's'}); "
+                     f"actions: {acts}")
+    return lines
+
+
 def _own_reading(reading: Any) -> str:
     """What a cause's own reading said, as the engine computed it.
 
@@ -1156,6 +1177,7 @@ def _rankings_as_text(session: Any, envelope: dict, manifest: Any,
         walked = _walk_line(leg, names)
         if walked:
             lines.append(walked)
+        lines.extend(_rung_lines(leg, names))
         named = _named_reading_line(leg, names)
         if named:
             lines.append(named)

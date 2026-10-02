@@ -26,6 +26,14 @@ diff between what that file declares and what the machine actually reports.
 diff works end to end and is exercised against the full upstream configuration
 corpus; the firmware regression gate and the liveness pass ship alongside it.
 
+**0.3.18 says what the place a fault stops explains.** Under each walk line,
+`detect` prints, for each sensor where the visible fault stops, what it explains
+below it -- the sensors downstream along declared fault channels that show a
+finding now -- and the declared actions that apply to it. On the shipped board the
+fan is on no walk's frontier while it reads inside its bounds; stalled under its
+lower bound with the zone over its upper one, it explains the zone. The
+`[detect]` extra needs `arbiter-engine` 0.2.32.
+
 **0.3.17 says where a confirmed cause stood.** From `arbiter-engine` 0.2.31 a case
 keeps the walk, and `confirm` and `cases` print, beside the rank, where the cause stood
 on the last walk before it. Confirmed after sixteen cycles of this board the fan reads
@@ -298,7 +306,7 @@ belongs in this paragraph.
 | Mock BMC | working — serves either tree shape over real HTTP, with fault injection |
 | Reporting | working — human summary and JSON |
 | Hygiene check | working — 8 shipped rules plus a local vocabulary, over files and commit messages, versioned hooks, and a CI sweep neither can be forgotten past |
-| Tests | **950** collected with PyYAML installed, **921** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
+| Tests | **953** collected with PyYAML installed, **924** with nothing. The difference is exactly `tests/test_action.py`, which reads the shipped `action.yml` and skips as a whole module when PyYAML is absent — so CI installs it; the `[detect]` extra adds an engine canary on top of both |
 | Liveness detection (Stage 2) | working — `detect` runs coverage and liveness in one pass, one exit code |
 | GitHub Action | working — composite, `uses: james-sheen/bmc-sensor-audit@action-v0`; the repository's own CI runs it as a consumer would and pins all three exit codes |
 | Fleet comparison | a separate tool — `fleet-sensor-baseline` reads `walk/1` and this one's exit codes, and never imports it |
