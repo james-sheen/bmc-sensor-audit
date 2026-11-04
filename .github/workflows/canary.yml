@@ -7,7 +7,9 @@
 #
 # So this installs the range rather than a pin, deliberately: the job exists to find out
 # when a permitted release moves something. It resolves and prints the version first, so
-# a red run names the release that caused it instead of leaving that to be guessed.
+# a red run names the release that caused it instead of leaving that to be guessed --
+# pytest's too, because on 2026-10-28 it was pytest 9.2.0 that turned this red, while
+# the log named only an engine that had not moved.
 #
 # It is scheduled, because upstream releases do not correlate with our pushes -- but a
 # schedule-only workflow in a sibling project accumulated zero runs across fifteen
@@ -59,6 +61,7 @@ jobs:
             $(python3 tools/runtime_deps.py)
           echo "resolved:"
           python3 -m pip show arbiter-engine | sed -n 's/^Version: /  arbiter-engine /p'
+          python3 -m pip show pytest | sed -n 's/^Version: /  pytest /p'
 
       - name: The whole suite, with the installed pre-release named
         run: |
@@ -97,6 +100,7 @@ jobs:
             pytest $(python3 tools/runtime_deps.py)
           echo "resolved:"
           python3 -m pip show arbiter-engine | sed -n 's/^Version: /  arbiter-engine /p'
+          python3 -m pip show pytest | sed -n 's/^Version: /  pytest /p'
 
       - name: Four pillars and two payload locations
         run: PYTHONPATH=src python3 -m pytest tests/test_engine_bridge.py -q

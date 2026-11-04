@@ -452,8 +452,8 @@ class TestTheVendoredCaptureRunsTheWholeStage2Path:
     deliberately: if one moves, the reader moved.
     """
 
-    @classmethod
     @pytest.fixture(scope="class")
+    @classmethod
     def stage2(cls):
         import json
         import sys
@@ -1115,8 +1115,8 @@ class TestTheAttestationArtifact:
     keys and drops the measurements entirely.
     """
 
-    @staticmethod
     @pytest.fixture(scope="class")
+    @staticmethod
     def artifact(tmp_path_factory):
         import subprocess
         import sys
@@ -1216,8 +1216,8 @@ class TestTheWholeCorpusFinishesInATimeAGateCanLiveWith:
 
     CEILING_SECONDS = 10.0
 
-    @staticmethod
     @pytest.fixture(scope="class")
+    @staticmethod
     def run_over_the_corpus(tmp_path_factory):
         import time
 
