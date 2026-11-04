@@ -31,12 +31,18 @@ jobs:
   # on 3.13 and 3.14 since CPython dropped classmethod descriptor chaining, and
   # a single-version matrix cannot see that by construction. Both hosts this is
   # deployed on run 3.14.
+  #
+  # And each version twice, without the engine and with it. The bridge module
+  # skips at import when the engine is absent, so until 2026-11-04 its tests ran
+  # on 3.11 alone, in the canary -- which is how the same classmethod fixture form
+  # stayed in the bridge until pytest 9.2 broke it on 3.11 too.
   versions:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        engine: [absent, present]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +64,17 @@ jobs:
           # here, so the range that binds and the range CI installs cannot
           # drift apart.
           python3 -m pip install --quiet pyyaml pytest $(python3 tools/runtime_deps.py)
+          # Each leg proves which one it is before the suite runs: an engine that
+          # fails to import is skipped exactly like an absent one, and a leg that
+          # quietly ran the other way would pass as this one.
+          if [ "${{ matrix.engine }}" = present ]; then
+            python3 -m pip install --quiet $(python3 tools/runtime_deps.py --extra detect)
+            python3 -c "import arbiter_engine.api"
+            python3 -m pip show arbiter-engine | sed -n 's/^Version: /  arbiter-engine /p'
+          elif python3 -c "import arbiter_engine" 2>/dev/null; then
+            echo "the engine is importable in the leg that runs without it" >&2
+            exit 1
+          fi
           python3 -m pytest tests/ -q
 
   checks:
